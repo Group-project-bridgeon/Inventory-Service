@@ -6,7 +6,9 @@ import (
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/config"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/platform/database"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/platform/logger"
+	"github.com/Group-project-bridgeon/Inventory-Service/internal/repository/postgres"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/router"
+	"github.com/Group-project-bridgeon/Inventory-Service/internal/security"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"net"
@@ -28,6 +30,10 @@ func Run() error {
 		// config.Load returns key names and static constraints, never environment values.
 		return &logger.Failure{Component: "configuration", Operation: "load_config", Reason: "invalid_configuration", Summary: err.Error()}
 	}
+	verifier, err := security.Load(cfg.JWTPublicKeyPath, cfg.JWTIssuer, cfg.JWTAudience)
+	if err != nil {
+		return &logger.Failure{Component: "security", Operation: "load_jwt_public_key", Reason: "invalid_jwt_configuration", Summary: "JWT public-key configuration is invalid"}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	db, err := database.NewPool(ctx, cfg.DatabaseURL, cfg.Database)
@@ -36,7 +42,7 @@ func Run() error {
 	}
 	defer db.Close()
 	gin.SetMode(gin.ReleaseMode)
-	server := &http.Server{Addr: ":" + cfg.Port, Handler: router.New(db, log, cfg.HTTP), ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, ReadTimeout: cfg.HTTP.ReadTimeout, WriteTimeout: cfg.HTTP.WriteTimeout, IdleTimeout: cfg.HTTP.IdleTimeout}
+	server := &http.Server{Addr: ":" + cfg.Port, Handler: router.NewWithBusiness(db, log, cfg.HTTP, verifier, postgres.NewWarehouseRepository(db)), ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, ReadTimeout: cfg.HTTP.ReadTimeout, WriteTimeout: cfg.HTTP.WriteTimeout, IdleTimeout: cfg.HTTP.IdleTimeout}
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		return diagnose("http", "listen", err)

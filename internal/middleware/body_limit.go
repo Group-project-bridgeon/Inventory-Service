@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"github.com/Group-project-bridgeon/Inventory-Service/internal/platform/logger"
 	"github.com/gin-gonic/gin"
 	"net/http"
 )
@@ -10,7 +11,7 @@ import (
 func MaxBodyBytes(limit int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.ContentLength > limit {
-			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+			logger.Respond(c, http.StatusRequestEntityTooLarge, "body_too_large", "request body too large")
 			return
 		}
 		if c.Request.Body != nil {

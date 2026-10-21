@@ -73,7 +73,7 @@ func TestDiagnostics(t *testing.T) {
 			if err := decoder.Decode(&event); err != nil {
 				t.Fatal(err)
 			}
-			if event["reason"] != tc.reason || event["component"] != "database" || event["operation"] != "startup_ping" || event["service"] != "inventory" || event["error"] != f.Error() || event["message"] != "inventory service failed" || event["level"] != "error" {
+			if event["reason"] != tc.reason || event["component"] != "database" || event["operation"] != "startup_ping" || event["service"] != "inventory" || event["message"] != f.Error() || event["level"] != "error" {
 				t.Fatalf("invalid structured log: %v", event)
 			}
 			if tc.state != "" && event["sqlstate"] != tc.state {
