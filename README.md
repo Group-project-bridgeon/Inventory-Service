@@ -2,11 +2,9 @@
 
 Inventory service for the team ERP project. Owns inventory_db; product and variant master data belongs to Catalog Service.
 
-## Implemented foundation
+## Implemented scope
 
-Typed startup configuration, JSON structured logging (service=inventory), pgxpool, Gin HTTP routing, public GET /health and GET /ready, recovery, body limits, failure/slow-request logging, and SIGINT/SIGTERM shutdown. Gin runs in release mode. No business endpoints are registered.
-
-Planned scope remains warehouses/storage locations, opening stock, movement ledger/balances, adjustments, reservations and transfers. Business rules and schema design are the next milestone; see [inventory-rules.md](docs/inventory-rules.md). Migrations, JWT enforcement, Docker/Compose and Kong changes are deferred.
+The service provides warehouse create/list/detail/update/status endpoints, UUIDv7 identifiers, cursor pagination, normalized unique codes, and an atomic single-default rule. A partial unique index and deferred trigger enforce exactly one active default at commit whenever warehouses exist. Warehouse writes use the inventory-owned PostgreSQL database through pgx and sqlc. Exact GET /health and GET /ready stay public; business routes require RS256 Auth access tokens and exact GLOBAL permissions. Stock balances, movements, reservations, transfers, bins/racks, Docker/Kong and deployment integration are later milestones. See [inventory-rules.md](docs/inventory-rules.md) and the [warehouse specification](docs/warehouse-implementation-spec.md).
 
 ## Prerequisites and conventions
 
@@ -33,6 +31,9 @@ Environment variables take precedence over optional .env defaults. No real .env 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | DATABASE_URL | required | Must use inventory_service and inventory_db |
+| JWT_PUBLIC_KEY_PATH | required | Path to Auth's public RSA PEM; Inventory never accepts a private key |
+| JWT_ISSUER | required | Expected JWT issuer; currently `erp-auth` |
+| JWT_AUDIENCE | required | Expected JWT audience; currently `erp-api` |
 | PORT | 8082 | Integer 1-65535 |
 | DB_MAX_CONNS | 10 | Positive int32 |
 | DB_MIN_CONNS | 2 | 0 through maximum |
@@ -61,12 +62,12 @@ For host execution, use 127.0.0.1 and the actual published host port. For a futu
 
 ## PowerShell setup and run
 
-Run from the existing feature branch; never paste credentials into chat or commit them. Replace PASSWORD with the URL-encoded Inventory password locally, and adjust the host port to the actual mapping.
+Run from `feat/warehouse-management`; never paste credentials into chat or commit them. Replace PASSWORD with the URL-encoded Inventory password locally, set JWT_PUBLIC_KEY_PATH to the Auth public key supplied through your secret/configuration workflow, and adjust the host port to the actual mapping. Do not copy Auth's private key.
 
 ```powershell
-Set-Location 'C:\Users\abdum\OneDrive\Desktop\New folder\Coding\Group Project\Inventory-Service'
+Set-Location <workspace>/Inventory-Service
 git branch --show-current
-# Expected: chore/inventory-service-bootstrap
+# Expected: feat/warehouse-management
 
 go mod download
 # Only create a local .env if one does not already exist:
@@ -88,11 +89,29 @@ Invoke-RestMethod 'http://localhost:8082/ready'
 
 /health returns 200 with {"status":"ok","service":"inventory"} without querying PostgreSQL. /ready returns 200 with status ready, or 503 with status not_ready. Readiness uses a request-derived timeout, propagating client cancellation. Neither probe exposes database details. After startup, a database outage affects readiness but not liveness.
 
+## Warehouse API
+
+All routes below are under `/api/v1/inventory/warehouses`. JSON responses use explicit snake_case fields; errors contain `code`, safe `error`, and `request_id`.
+
+| Method and path | Permission | Result |
+| --- | --- | --- |
+| POST `/` | `inventory.warehouses:create` | Create; 201; first record becomes default |
+| GET `/` | `inventory.warehouses:read` | `{items, next_cursor}`; `limit` defaults to 50 and is bounded to 1-100; optional opaque `cursor` |
+| GET `/:id` | `inventory.warehouses:read` | Detail by UUID |
+| PUT `/:id` | `inventory.warehouses:update` | Replace name/address; optional `is_default: true` promotes an active warehouse |
+| PATCH `/:id/status` | `inventory.warehouses:update` | Set required `is_active` boolean |
+
+Create body: `{"code":"WH-01","name":"Main","address":"Optional"}`. Code is trimmed and uppercased; updates reject unknown fields (including code), so it cannot change. PUT requires name; omitted address clears it; omitted `is_default` preserves current state. To switch defaults, PUT another active warehouse with `is_default:true`; switching is atomic. The current default cannot be demoted/deactivated until another is selected. Duplicate code and default conflicts return 409. There is no hard-delete endpoint.
+
+Authorization is GLOBAL-only; warehouse-scoped grants are not accepted. A token's grant state can remain effective for at most its 15-minute lifetime. Permission definitions are an additive Authentication migration; explicit role grants are a separate deployment action and are not made by this service.
+
+Apply Inventory migrations only through the approved deployment procedure after backup and review. Never apply them to a regular database as part of local code verification. The down migration drops the warehouse table; recovery requires restoring the pre-migration backup. The sqlc generation command is in `docs/verification.md`.
+
 ## Verification
 
 ```powershell
 gofmt -w cmd internal
-go mod tidy
+docker run --rm -v "${PWD}:/src" -w /src sqlc/sqlc:1.31.1 generate
 go test -count=1 ./...
 go vet ./...
 go build ./...
@@ -100,7 +119,7 @@ git diff --check
 git status --short
 ```
 
-Unit tests do not require PostgreSQL. They cover defaults/validation, probe responses and cancellation, pool settings and secret-safe errors, recovery, body read limits, logging, and HTTP drain/forced-close behavior. Go test/build inspect new source files too; ordinary git diff does not display untracked contents. Review cmd/, internal/, docs/, .env.example, go.mod and go.sum explicitly before staging.
+Unit tests do not require PostgreSQL. They cover validation, pagination, JWT claims and permissions, request correlation, safe diagnostics, probes, recovery, body limits and shutdown. Isolated PostgreSQL integration checks are required to verify actual constraints, transactions and persistence; unit tests do not prove live database, Kong or deployment behavior. See [verification.md](docs/verification.md) for isolated checks and [logging.md](docs/logging.md) for the diagnostics contract.
 
 Live database startup, actual provisioning, database outage/recovery and real OS signal behavior require local runtime verification. Configuration files and passing unit tests do not establish these facts.
 
@@ -118,7 +137,7 @@ Live database startup, actual provisioning, database outage/recovery and real OS
 ## Safe startup diagnostics
 
 Fatal failures are logged once by main after app cleanup. JSON fields include service,
-component, operation, reason, error (a safe summary), and message. A valid five-character
+component, operation, reason, and message (a safe summary). A valid five-character
 sqlstate is included only for PostgreSQL server errors. HTTP responses remain generic.
 The diagnostic payload retains no raw cause. Never log a raw pgx error or connection URL.
 
@@ -146,8 +165,8 @@ at the boundary uses unknown_failure and omits its raw message.
 Illustrative outputs (these do not identify the cause of a particular local failure):
 
 ```json
-{"level":"error","service":"inventory","component":"database","operation":"startup_ping","reason":"authentication_failed","sqlstate":"28P01","error":"PostgreSQL authentication failed","message":"inventory service failed"}
-{"level":"error","service":"inventory","component":"database","operation":"startup_ping","reason":"connection_refused","error":"PostgreSQL connection refused; check listener and host port","message":"inventory service failed"}
+{"level":"error","service":"inventory","component":"database","operation":"startup_ping","reason":"authentication_failed","sqlstate":"28P01","message":"PostgreSQL authentication failed"}
+{"level":"error","service":"inventory","component":"database","operation":"startup_ping","reason":"connection_refused","message":"PostgreSQL connection refused; check listener and host port"}
 ```
 
 Run `go run ./cmd/server` again from this repository with your existing local configuration.
@@ -155,3 +174,5 @@ Use the resulting reason to choose the next investigation. A healthy container, 
 host port, or a successful separate login does not establish that the application's URL
 and credentials are correct. Diagnostics tests inject synthetic failures and a no-network
 pgx dialer; they do not prove successful live database startup.
+
+Warehouse hardening verification and safe source archives: see [docs/verification.md](docs/verification.md). Inventory validates token_version as a signed contract field only; no live Auth revocation lookup occurs. JWT public-key validation runs before database initialization.

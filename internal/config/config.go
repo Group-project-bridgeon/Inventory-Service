@@ -17,10 +17,11 @@ type HTTPConfig struct {
 	SlowRequestThreshold, ReadinessTimeout, ReadHeaderTimeout, ReadTimeout, WriteTimeout, IdleTimeout, ShutdownTimeout time.Duration
 }
 type Config struct {
-	Port        string
-	DatabaseURL string
-	Database    DatabaseConfig
-	HTTP        HTTPConfig
+	Port                                     string
+	DatabaseURL                              string
+	JWTPublicKeyPath, JWTIssuer, JWTAudience string
+	Database                                 DatabaseConfig
+	HTTP                                     HTTPConfig
 }
 
 // Load reads the environment once. Errors identify keys, never their values.
@@ -28,6 +29,12 @@ func Load() (*Config, error) {
 	c := &Config{DatabaseURL: os.Getenv("DATABASE_URL")}
 	if strings.TrimSpace(c.DatabaseURL) == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
+	}
+	c.JWTPublicKeyPath = strings.TrimSpace(os.Getenv("JWT_PUBLIC_KEY_PATH"))
+	c.JWTIssuer = os.Getenv("JWT_ISSUER")
+	c.JWTAudience = os.Getenv("JWT_AUDIENCE")
+	if c.JWTPublicKeyPath == "" || strings.TrimSpace(c.JWTIssuer) == "" || strings.TrimSpace(c.JWTAudience) == "" || c.JWTIssuer != strings.TrimSpace(c.JWTIssuer) || c.JWTAudience != strings.TrimSpace(c.JWTAudience) {
+		return nil, fmt.Errorf("JWT_PUBLIC_KEY_PATH, JWT_ISSUER and JWT_AUDIENCE are required")
 	}
 	number := func(key string, fallback, min, max int64) (int64, error) {
 		value, ok := os.LookupEnv(key)

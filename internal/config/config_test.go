@@ -17,6 +17,9 @@ func isolated(t *testing.T) {
 		}
 	}
 	t.Setenv("DATABASE_URL", "postgres://inventory_service:example@localhost/inventory_db")
+	t.Setenv("JWT_PUBLIC_KEY_PATH", "keys/auth-public.pem")
+	t.Setenv("JWT_ISSUER", "erp-auth")
+	t.Setenv("JWT_AUDIENCE", "erp-api")
 }
 func TestDefaults(t *testing.T) {
 	isolated(t)

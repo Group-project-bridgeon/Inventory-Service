@@ -13,9 +13,11 @@ type Failure struct {
 	Reason    string
 	SQLState  string
 	Summary   string
+	cause     error
 }
 
 func (f *Failure) Error() string { return f.Summary }
+func (f *Failure) Unwrap() error { return f.cause }
 
 // LogFailure is called once at the process boundary, after application cleanup.
 // Even a wrapper around Failure may contain secrets: log only the safe payload.
@@ -25,9 +27,9 @@ func LogFailure(log zerolog.Logger, err error) {
 	if errors.As(err, &known) && known != nil {
 		f = known
 	}
-	event := log.Error().Str("component", f.Component).Str("operation", f.Operation).Str("reason", f.Reason).Str("error", f.Summary)
+	event := log.Error().Str("component", f.Component).Str("operation", f.Operation).Str("reason", f.Reason)
 	if f.SQLState != "" {
 		event.Str("sqlstate", f.SQLState)
 	}
-	event.Msg("inventory service failed")
+	event.Msg(f.Summary)
 }
