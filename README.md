@@ -176,3 +176,7 @@ and credentials are correct. Diagnostics tests inject synthetic failures and a n
 pgx dialer; they do not prove successful live database startup.
 
 Warehouse hardening verification and safe source archives: see [docs/verification.md](docs/verification.md). Inventory validates token_version as a signed contract field only; no live Auth revocation lookup occurs. JWT public-key validation runs before database initialization.
+
+## Docker and Kong
+
+See [container instructions](docs/docker.md) and the linked Platform integration guide. Inventory is internal on port 8082; clients use Kong at localhost:8000/api/v1/inventory/warehouses.

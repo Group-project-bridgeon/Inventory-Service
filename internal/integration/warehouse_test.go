@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/security"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
@@ -25,6 +26,19 @@ func TestIsolatedAuthInventoryHTTP(t *testing.T) {
 	if os.Getenv("WAREHOUSE_HTTP_ISOLATED") != "1" {
 		t.Skip("disposable direct HTTP harness required")
 	}
+	runWarehouseHTTP(t, false)
+}
+
+// TestIsolatedAuthInventoryGateway uses real login tokens through disposable Kong.
+func TestIsolatedAuthInventoryGateway(t *testing.T) {
+	if os.Getenv("WAREHOUSE_GATEWAY_ISOLATED") != "1" {
+		t.Skip("disposable Kong fixture required")
+	}
+	runWarehouseHTTP(t, true)
+}
+
+func runWarehouseHTTP(t *testing.T, gateway bool) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	connect := func(env, name string) *pgxpool.Pool {
@@ -39,7 +53,11 @@ func TestIsolatedAuthInventoryHTTP(t *testing.T) {
 		t.Cleanup(pool.Close)
 		return pool
 	}
-	auth := connect("WAREHOUSE_AUTH_DATABASE_URL", "auth_warehouse_test")
+	authName := "auth_warehouse_test"
+	if gateway {
+		authName = "auth_security_test"
+	}
+	auth := connect("WAREHOUSE_AUTH_DATABASE_URL", authName)
 	inventory := connect("WAREHOUSE_INVENTORY_DATABASE_URL", "inventory_db")
 	bases := map[string]string{"auth": os.Getenv("WAREHOUSE_AUTH_URL"), "inventory": os.Getenv("WAREHOUSE_INVENTORY_URL")}
 	for _, base := range bases {
@@ -159,9 +177,11 @@ func TestIsolatedAuthInventoryHTTP(t *testing.T) {
 	reader := fixture([]string{"read"}, "GLOBAL")
 	empty := fixture(nil, "GLOBAL")
 	scoped := fixture([]string{"read", "create", "update"}, "WAREHOUSE")
-	for _, target := range []string{"auth", "inventory"} {
-		for _, path := range []string{"/health", "/ready"} {
-			request(target, "GET", path, "", nil, 200)
+	if !gateway {
+		for _, target := range []string{"auth", "inventory"} {
+			for _, path := range []string{"/health", "/ready"} {
+				request(target, "GET", path, "", nil, 200)
+			}
 		}
 	}
 	const path = "/api/v1/inventory/warehouses"
@@ -205,6 +225,7 @@ func TestIsolatedAuthInventoryHTTP(t *testing.T) {
 	}
 	first := create("HTTP-A")
 	second := create("HTTP-B")
+	request("inventory", "POST", path, editor, map[string]string{"code": " http-a ", "name": "Duplicate"}, 409)
 	if !first.IsDefault || !first.IsActive || second.IsDefault {
 		t.Fatal("initial default contract")
 	}
@@ -240,5 +261,37 @@ func TestIsolatedAuthInventoryHTTP(t *testing.T) {
 	if err = inventory.QueryRow(ctx, `SELECT name,is_active FROM warehouses WHERE id=$1 AND is_default`, second.ID).Scan(&name, &active); err != nil || name != "Promoted" || !active {
 		t.Fatal("promotion persistence")
 	}
-	t.Log("PASS: real Auth login, local signature/contract, GLOBAL scope, unchanged denied writes, persisted default transitions; direct HTTP, no Kong")
+	if gateway {
+		request("inventory", "GET", "/health", "", nil, 404)
+		request("inventory", "GET", "/ready", "", nil, 404)
+		request("inventory", "GET", path+"/"+uuid.NewString(), reader, nil, 404)
+		request("inventory", "GET", "/api/v1/catalog/brands", "", nil, 401)
+		request("inventory", "GET", "/api/v1/catalog/brands", reader, nil, 403)
+		request("inventory", "GET", path, "invalid-token", nil, 401)
+		// Only the negative expiry case is locally signed; every successful request
+		// above uses actual Auth login. The fixture key is never mounted into Inventory.
+		data, err := os.ReadFile(os.Getenv("WAREHOUSE_NEGATIVE_PRIVATE_KEY"))
+		if err != nil {
+			t.Fatal("negative-test fixture key unavailable")
+		}
+		key, err := jwt.ParseRSAPrivateKeyFromPEM(data)
+		if err != nil {
+			t.Fatal("negative-test fixture key invalid")
+		}
+		claims, err := verifier.Verify(editor)
+		if err != nil {
+			t.Fatal("real login token invalid")
+		}
+		claims.IssuedAt = jwt.NewNumericDate(time.Now().Add(-901 * time.Second))
+		claims.NotBefore = claims.IssuedAt
+		claims.ExpiresAt = jwt.NewNumericDate(claims.IssuedAt.Add(900 * time.Second))
+		expired, err := jwt.NewWithClaims(jwt.SigningMethodRS256, claims).SignedString(key)
+		if err != nil {
+			t.Fatal("build negative expired-token fixture")
+		}
+		request("inventory", "GET", path, expired, nil, 401)
+		t.Log("PASS: Kong routing, real login JWTs, invalid/expired rejection, preserved Auth/Catalog routes, persisted warehouse rules")
+	} else {
+		t.Log("PASS: real Auth login, local signature/contract, GLOBAL scope, unchanged denied writes, persisted default transitions; direct HTTP, no Kong")
+	}
 }
