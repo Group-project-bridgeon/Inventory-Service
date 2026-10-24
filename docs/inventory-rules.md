@@ -2,11 +2,11 @@
 
 ## Confirmed scope
 
-Inventory owns inventory_db and connects as inventory_service. Product and variant master data belongs to Catalog. This milestone implements warehouse management only; stock balances, movements, reservations, transfers, bins/racks, and Kafka remain later work. Exact GET /health and GET /ready remain public.
+Inventory owns inventory_db and connects as inventory_service. Product and variant master data belongs to Catalog. Application routes implement warehouse management. Stock domain types, migration 000002, generated queries and the internal transactional posting service/repository are implemented. Posting has no production wiring; stock HTTP routes remain absent. See [stock-foundation-spec.md](stock-foundation-spec.md), section 15. Reservations, transfers, bins/racks, fulfillment and Kafka remain later work. Exact GET /health and GET /ready remain public.
 
 ## Confirmed warehouse decisions
 
-- Support multiple warehouses and track future stock by warehouse only; no rack/bin tables.
+- Support multiple warehouses and track future stock by warehouse + product variant; no rack/bin tables.
 - Required normalized warehouse code and name; address is optional.
 - Code is trimmed and uppercased on create, unique in PostgreSQL, and immutable after creation. Name/address can be changed.
 - There is one active default warehouse after the first warehouse is created. First create sets it. A deferred database constraint trigger and unique index enforce exactly one at commit; a transaction lock serializes writes. Promotion of another active warehouse switches the default atomically; the current default cannot be demoted or deactivated until another warehouse is selected.
@@ -23,18 +23,54 @@ Important decisions (Malayalam): code മാറ്റാനാകാത്തത
 Catalog internal/domain/unit.go defines ID, Code, Name and active status; product_variant.go references UnitID. These models do not establish inventory quantity precision, conversions, or fractional quantity policy.
 Authentication internal/helper/jwt.go explicitly defines token Permissions as GLOBAL grants only. Its integration/catalog_security_test.go checks that WAREHOUSE grants are excluded. Warehouse-scoped authorization needs a future agreed contract; existing tokens must not be interpreted as warehouse grants.
 
+## Confirmed Stock Foundation business decisions
+
+- Identity is warehouse UUID + Catalog product variant UUID; product/variant master data stays in Catalog.
+- Stock quantities are whole physical pieces only. Reject fractional input; box/pack counts convert into pieces using item-specific factors, never a universal box size.
+- Catalog owns piece-base-unit semantics and variant-specific box/pack definitions.
+- Block ordinary new receipts and issues if the warehouse, product, variant or base unit is inactive. Historical reads remain available; controlled corrections require a later workflow design.
+- R1 (confirmed 2026-10-23): require fresh active status at the coherent Catalog check and retain its revision and validation time for later posting. Catalog may deactivate an entity before Inventory commits; active-at-commit is not guaranteed. Slice 4c approval (2026-10-24) sets maximum observation age 5 seconds and maximum future-clock allowance 1 second, independent of JWT tolerance. The earlier two-second proposal was not adopted.
+- Block negative stock even under concurrent requests.
+- Posted movements are immutable. Corrections append compensating/reversal movements; historical conversions do not change when pack definitions change.
+- Stock movement entries, corresponding balance changes and successful idempotency records commit atomically. Duplicate requests must not change stock twice.
+- Inventory must not query Catalog's database or add cross-service database foreign keys.
+- No unrestricted public stock mutation endpoint is justified by the foundation.
+- Opening stock, adjustments, reservations, transfers and fulfillment remain later workflows. Fulfillment/Delivery is planned as a separate internal Inventory module.
+
+These are confirmed requirements. Domain slice 1, schema/SQL slice 2 and internal posting slice 3 are implemented. Migration 000002 adds four stock tables, exact BIGINT constraints, deferred ledger/balance/result/key correspondence and immutable-fact guards. StockRepository composes the existing queries in a caller-bounded transaction. Permissions and production integration remain later work. See sections 13 and 15 of [stock-foundation-spec.md](stock-foundation-spec.md) for invariant ownership and verification.
+
+Domain slice 1, schema/SQL slice 2 and internal posting slice 3 are authorized and implemented. The normal database has not been migrated by this work. Catalog prerequisites, coherent authenticated stock-reference APIs and machine-token issuance remain unimplemented by these slices. Ordinary production posting, including direct pieces, stays disabled until those prerequisites and approved freshness enforcement exist. Synthetic references/authorization/freshness appear only in tests. Further slices require approval.
+
 ## Unresolved: ask before schema or business implementation
 
-- Quantity units, precision, fractional quantities and conversions.
-- Whether negative physical stock is allowed.
-- Opening stock posting, corrections, dates and audit history.
+- Opening stock posting, correction/reversal workflow, effective dates and operational audit/recovery details.
 - Adjustment reasons and approval requirements.
 - Reservation, release and transfer semantics when introduced.
 
-Quantity units, precision/fractional policy, negative stock, opening stock, corrections/audit, adjustments/approval, and reservation/release/transfer semantics remain unresolved for their later milestones. Ask before implementing those workflows.
+Whole pieces, Catalog ownership of piece/pack metadata, pack-to-piece conversion, inactive-reference blocking at check time (R1), nonnegative balances, immutable posted movements, atomic posting and duplicate prevention are confirmed above. Opening stock, correction workflow, dates, approvals, reservations and transfers require later workflow decisions. Remaining technical slices require review before implementation.
 
 ## Transaction and token boundaries
 
 All warehouse mutations acquire transaction-scoped advisory lock 782341092 before reading or deciding. It serializes first creation, code conflicts, default promotion and activation updates. Keep the same key and read/decide/write/commit in one transaction. Reads remain unlocked. The unique index and deferred trigger are database backstops, including at Commit.
 
 Inventory validates token_version as part of the signed token contract only. It performs no live Auth revocation lookup. Grant/revocation changes take effect when existing access tokens expire (maximum 15 minutes).
+
+Internal posting compares each locked balance's base_unit_id with its validated reference snapshot before changing quantities. InitializeStockBalance never overwrites an existing binding. Any mismatch rejects the entire operation with ErrReferenceChanged and rolls back staged balances, movements, headers and idempotency claims. Disposable repository tests exercise this application-level comparison with synthetic observations; real Catalog provenance remains unverified.
+
+Posting requires explicit ProducerAuthorizer, ReferenceProvider and FreshnessPolicy dependencies; nonzero actor UUIDs and producer strings alone grant no authority. Reauthorize every attempt/replay. Completed results replay without Catalog. New attempts reacquire observations outside locks and retain coherent revision/check time under confirmed R1; active-at-commit is not guaranteed. Slice 4c enforces the approved 5-second age/1-second future allowance at response acceptance and before each new transaction, including after pool acquisition.
+
+Internal defaults: overall 5s, reference resolution 2s per attempt, cumulative store-call budget 3s, lock wait/primary lookup 500ms each, independent rollback/connection cleanup 2s. At most three attempts, only for known rolled-back 40001/40P01, with cancellable 10-20ms jitter. Unknown Commit never automatically re-mutates: a fresh physical primary lookup can prove success; otherwise ErrOutcomeUnknown requires retrying the same identities/key. The 3s local budget reflects disposable 100-line cost observations, not an SLA. See specification section 15 for precise coverage and remaining production gates.
+
+## Slice 4c current integration checkpoint (2026-10-24)
+
+The earlier slice 1-3 prerequisite statements describe their historical scope.
+Catalog piece/pack/coherent reads (4a), separate machine issuance/verification (4b)
+and optional secured transport/Inventory adapter (4c) now exist in source. Real
+disposable Auth HTTPS -> Catalog HTTPS -> Inventory PostgreSQL posting has passed;
+the earlier synthetic-only evidence does not describe this additional test.
+Normal infrastructure and data were not changed. Production posting remains
+unwired and stock mutation HTTP APIs remain absent, pending an approved workflow
+and producer/actor permission contract. Future wiring must use the approved
+freshness policy and NewStockRepositoryWithFreshness to include pool wait time.
+See [catalog-reference-integration.md](catalog-reference-integration.md) and
+specification section 17 for the current contract and deployment prerequisites.

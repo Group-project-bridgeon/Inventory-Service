@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"github.com/Group-project-bridgeon/Inventory-Service/internal/catalogclient"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/config"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/platform/database"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/platform/logger"
@@ -36,6 +37,15 @@ func Run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Validate/build enabled dependencies without granting any posting authority.
+	// The future workflow must explicitly receive these components.
+	if cfg.StockReference.Enabled {
+		references, err := catalogclient.New(cfg.StockReference)
+		if err != nil {
+			return diagnose("configuration", "stock_reference", err)
+		}
+		defer references.Close()
+	}
 	db, err := database.NewPool(ctx, cfg.DatabaseURL, cfg.Database)
 	if err != nil {
 		return err
