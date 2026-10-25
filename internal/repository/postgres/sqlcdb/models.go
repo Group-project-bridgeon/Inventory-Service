@@ -8,6 +8,70 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type StockBalance struct {
+	WarehouseID  pgtype.UUID
+	VariantID    pgtype.UUID
+	BaseUnitID   pgtype.UUID
+	OnHandPieces int64
+	Version      int64
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
+type StockIdempotency struct {
+	Producer           string
+	Key                pgtype.UUID
+	FingerprintVersion int16
+	RequestHash        []byte
+	ActorUserID        pgtype.UUID
+	OperationID        pgtype.UUID
+	State              string
+	ResultVersion      pgtype.Int2
+	Result             []byte
+	CreatedAt          pgtype.Timestamptz
+	CompletedAt        pgtype.Timestamptz
+}
+
+type StockMovement struct {
+	ID                     pgtype.UUID
+	OperationID            pgtype.UUID
+	LineNumber             int16
+	WarehouseID            pgtype.UUID
+	VariantID              pgtype.UUID
+	BalanceVersion         int64
+	Direction              string
+	InputCount             int64
+	PiecesPerInput         int64
+	Pieces                 int64
+	BeforePieces           int64
+	AfterPieces            int64
+	ProductID              pgtype.UUID
+	BaseUnitID             pgtype.UUID
+	PackID                 pgtype.UUID
+	PackRevision           pgtype.Text
+	ProductCode            string
+	ProductName            string
+	Sku                    string
+	BaseUnitCode           string
+	PackLabel              pgtype.Text
+	StockReferenceRevision string
+	ReferenceCheckedAt     pgtype.Timestamptz
+}
+
+type StockOperation struct {
+	ID             pgtype.UUID
+	Producer       string
+	SourceEventID  pgtype.UUID
+	WarehouseID    pgtype.UUID
+	Direction      string
+	ActorUserID    pgtype.UUID
+	LineCount      int16
+	CommandVersion int16
+	IdempotencyKey pgtype.UUID
+	PostedAt       pgtype.Timestamptz
+	FirstRequestID pgtype.Text
+}
+
 type Warehouse struct {
 	ID        pgtype.UUID
 	Code      string

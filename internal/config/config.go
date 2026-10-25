@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"github.com/Group-project-bridgeon/Inventory-Service/internal/catalogclient"
 	"os"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ type HTTPConfig struct {
 	SlowRequestThreshold, ReadinessTimeout, ReadHeaderTimeout, ReadTimeout, WriteTimeout, IdleTimeout, ShutdownTimeout time.Duration
 }
 type Config struct {
+	StockReference                           catalogclient.Config
 	Port                                     string
 	DatabaseURL                              string
 	JWTPublicKeyPath, JWTIssuer, JWTAudience string
@@ -97,6 +99,10 @@ func Load() (*Config, error) {
 	// PostgreSQL uses integer milliseconds; never silently turn a positive timeout into zero.
 	if c.Database.StatementTimeout < time.Millisecond || c.Database.StatementTimeout/time.Millisecond > 2147483647 {
 		return nil, fmt.Errorf("DB_STATEMENT_TIMEOUT must be between 1ms and 2147483647ms")
+	}
+	c.StockReference, err = catalogclient.LoadConfig()
+	if err != nil {
+		return nil, err
 	}
 	return c, nil
 }

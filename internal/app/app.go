@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"github.com/Group-project-bridgeon/Inventory-Service/internal/catalogclient"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/config"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/platform/database"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/platform/logger"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/repository/postgres"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/router"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/security"
+	"github.com/Group-project-bridgeon/Inventory-Service/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"net"
@@ -36,13 +38,24 @@ func Run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Validate/build enabled dependencies without granting any posting authority.
+	// The future workflow must explicitly receive these components.
+	if cfg.StockReference.Enabled {
+		references, err := catalogclient.New(cfg.StockReference)
+		if err != nil {
+			return diagnose("configuration", "stock_reference", err)
+		}
+		defer references.Close()
+	}
 	db, err := database.NewPool(ctx, cfg.DatabaseURL, cfg.Database)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 	gin.SetMode(gin.ReleaseMode)
-	server := &http.Server{Addr: ":" + cfg.Port, Handler: router.NewWithBusiness(db, log, cfg.HTTP, verifier, postgres.NewWarehouseRepository(db)), ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, ReadTimeout: cfg.HTTP.ReadTimeout, WriteTimeout: cfg.HTTP.WriteTimeout, IdleTimeout: cfg.HTTP.IdleTimeout}
+	warehouses := postgres.NewWarehouseRepository(db)
+	reads := service.NewStockReadService(postgres.NewStockReadRepository(db), warehouses, cfg.Database.StatementTimeout)
+	server := &http.Server{Addr: ":" + cfg.Port, Handler: router.NewWithBusiness(db, log, cfg.HTTP, verifier, warehouses, reads), ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, ReadTimeout: cfg.HTTP.ReadTimeout, WriteTimeout: cfg.HTTP.WriteTimeout, IdleTimeout: cfg.HTTP.IdleTimeout}
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		return diagnose("http", "listen", err)
