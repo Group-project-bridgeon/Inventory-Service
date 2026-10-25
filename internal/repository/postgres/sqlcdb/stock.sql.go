@@ -458,6 +458,101 @@ func (q *Queries) ListStockHistory(ctx context.Context, arg ListStockHistoryPara
 	return items, nil
 }
 
+const listWarehouseStockMovements = `-- name: ListWarehouseStockMovements :many
+SELECT m.id, m.operation_id, m.line_number, m.warehouse_id, m.variant_id, m.balance_version, m.direction, m.input_count, m.pieces_per_input, m.pieces, m.before_pieces, m.after_pieces, m.product_id, m.base_unit_id, m.pack_id, m.pack_revision, m.product_code, m.product_name, m.sku, m.base_unit_code, m.pack_label, m.stock_reference_revision, m.reference_checked_at, o.posted_at
+FROM stock_movements m JOIN stock_operations o ON o.id=m.operation_id
+WHERE m.warehouse_id=$1::uuid
+  AND ($2::uuid IS NULL OR m.variant_id=$2::uuid)
+  AND ($3::uuid IS NULL OR m.id<$3::uuid)
+ORDER BY m.id DESC LIMIT LEAST(GREATEST($4::int,1),101)
+`
+
+type ListWarehouseStockMovementsParams struct {
+	WarehouseID   pgtype.UUID
+	VariantFilter pgtype.UUID
+	BeforeID      pgtype.UUID
+	PageSize      int32
+}
+
+type ListWarehouseStockMovementsRow struct {
+	ID                     pgtype.UUID
+	OperationID            pgtype.UUID
+	LineNumber             int16
+	WarehouseID            pgtype.UUID
+	VariantID              pgtype.UUID
+	BalanceVersion         int64
+	Direction              string
+	InputCount             int64
+	PiecesPerInput         int64
+	Pieces                 int64
+	BeforePieces           int64
+	AfterPieces            int64
+	ProductID              pgtype.UUID
+	BaseUnitID             pgtype.UUID
+	PackID                 pgtype.UUID
+	PackRevision           pgtype.Text
+	ProductCode            string
+	ProductName            string
+	Sku                    string
+	BaseUnitCode           string
+	PackLabel              pgtype.Text
+	StockReferenceRevision string
+	ReferenceCheckedAt     pgtype.Timestamptz
+	PostedAt               pgtype.Timestamptz
+}
+
+// Live warehouse history: immutable unique movement ID is the ordering key,
+// not per-variant balance_version or transaction/commit time.
+func (q *Queries) ListWarehouseStockMovements(ctx context.Context, arg ListWarehouseStockMovementsParams) ([]ListWarehouseStockMovementsRow, error) {
+	rows, err := q.db.Query(ctx, listWarehouseStockMovements,
+		arg.WarehouseID,
+		arg.VariantFilter,
+		arg.BeforeID,
+		arg.PageSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWarehouseStockMovementsRow
+	for rows.Next() {
+		var i ListWarehouseStockMovementsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OperationID,
+			&i.LineNumber,
+			&i.WarehouseID,
+			&i.VariantID,
+			&i.BalanceVersion,
+			&i.Direction,
+			&i.InputCount,
+			&i.PiecesPerInput,
+			&i.Pieces,
+			&i.BeforePieces,
+			&i.AfterPieces,
+			&i.ProductID,
+			&i.BaseUnitID,
+			&i.PackID,
+			&i.PackRevision,
+			&i.ProductCode,
+			&i.ProductName,
+			&i.Sku,
+			&i.BaseUnitCode,
+			&i.PackLabel,
+			&i.StockReferenceRevision,
+			&i.ReferenceCheckedAt,
+			&i.PostedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockStockBalance = `-- name: LockStockBalance :one
 SELECT warehouse_id, variant_id, base_unit_id, on_hand_pieces, version, created_at, updated_at FROM stock_balances WHERE warehouse_id=$1 AND variant_id=$2 FOR UPDATE
 `

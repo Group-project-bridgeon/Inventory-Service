@@ -2,7 +2,7 @@
 
 ## Confirmed scope
 
-Inventory owns inventory_db and connects as inventory_service. Product and variant master data belongs to Catalog. Application routes implement warehouse management. Stock domain types, migration 000002, generated queries and the internal transactional posting service/repository are implemented. Posting has no production wiring; stock HTTP routes remain absent. See [stock-foundation-spec.md](stock-foundation-spec.md), section 15. Reservations, transfers, bins/racks, fulfillment and Kafka remain later work. Exact GET /health and GET /ready remain public.
+Inventory owns inventory_db and connects as inventory_service. Product and variant master data belongs to Catalog. Application routes implement warehouse management and authenticated stock balance/movement reads. Stock domain types, migration 000002, generated queries and the internal transactional posting service/repository are implemented. Posting has no production wiring; stock mutation HTTP routes remain absent. See [stock-read-api.md](stock-read-api.md) and [stock-foundation-spec.md](stock-foundation-spec.md), sections 15 and 18. Reservations, transfers, bins/racks, fulfillment and Kafka remain later work. Exact GET /health and GET /ready remain public.
 
 ## Confirmed warehouse decisions
 
@@ -74,3 +74,16 @@ and producer/actor permission contract. Future wiring must use the approved
 freshness policy and NewStockRepositoryWithFreshness to include pool wait time.
 See [catalog-reference-integration.md](catalog-reference-integration.md) and
 specification section 17 for the current contract and deployment prerequisites.
+
+## Stock Read APIs checkpoint (2026-10-25)
+
+Warehouse-scoped balance and movement GET routes now use the user-approved exact
+GLOBAL inventory.stock-balances:read and inventory.stock-movements:read permissions.
+No authority is inferred from warehouse-read grants; machine tokens remain separate.
+Reads expose stored balances and immutable snapshots, including inactive historical
+references, without Catalog access or balance initialization. All BIGINT quantities
+and versions serialize as strings. Live keyset pages are not frozen reconciliation
+snapshots; movement UUID order is not commit order. Auth migration 000008 adds only
+definitions and Inventory 000003 adds read indexes, applied only in disposable
+verification here. See [stock-read-api.md](stock-read-api.md) for exact filters,
+cursors, examples and manual checks. This does not enable production stock mutations.

@@ -74,3 +74,13 @@ WHERE m.warehouse_id=sqlc.arg(warehouse_id) AND m.variant_id=sqlc.arg(variant_id
   AND m.balance_version<=sqlc.arg(upper_version)::bigint
   AND (sqlc.narg(before_version)::bigint IS NULL OR m.balance_version<sqlc.narg(before_version)::bigint)
 ORDER BY m.balance_version DESC LIMIT LEAST(GREATEST(sqlc.arg(page_size)::int,1),101);
+
+-- Live warehouse history: immutable unique movement ID is the ordering key,
+-- not per-variant balance_version or transaction/commit time.
+-- name: ListWarehouseStockMovements :many
+SELECT m.*, o.posted_at
+FROM stock_movements m JOIN stock_operations o ON o.id=m.operation_id
+WHERE m.warehouse_id=sqlc.arg(warehouse_id)::uuid
+  AND (sqlc.narg(variant_filter)::uuid IS NULL OR m.variant_id=sqlc.narg(variant_filter)::uuid)
+  AND (sqlc.narg(before_id)::uuid IS NULL OR m.id<sqlc.narg(before_id)::uuid)
+ORDER BY m.id DESC LIMIT LEAST(GREATEST(sqlc.arg(page_size)::int,1),101);

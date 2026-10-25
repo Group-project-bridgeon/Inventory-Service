@@ -10,6 +10,7 @@ import (
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/repository/postgres"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/router"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/security"
+	"github.com/Group-project-bridgeon/Inventory-Service/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"net"
@@ -52,7 +53,9 @@ func Run() error {
 	}
 	defer db.Close()
 	gin.SetMode(gin.ReleaseMode)
-	server := &http.Server{Addr: ":" + cfg.Port, Handler: router.NewWithBusiness(db, log, cfg.HTTP, verifier, postgres.NewWarehouseRepository(db)), ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, ReadTimeout: cfg.HTTP.ReadTimeout, WriteTimeout: cfg.HTTP.WriteTimeout, IdleTimeout: cfg.HTTP.IdleTimeout}
+	warehouses := postgres.NewWarehouseRepository(db)
+	reads := service.NewStockReadService(postgres.NewStockReadRepository(db), warehouses, cfg.Database.StatementTimeout)
+	server := &http.Server{Addr: ":" + cfg.Port, Handler: router.NewWithBusiness(db, log, cfg.HTTP, verifier, warehouses, reads), ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, ReadTimeout: cfg.HTTP.ReadTimeout, WriteTimeout: cfg.HTTP.WriteTimeout, IdleTimeout: cfg.HTTP.IdleTimeout}
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		return diagnose("http", "listen", err)

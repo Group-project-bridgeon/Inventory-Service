@@ -8,11 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/catalogclient"
+	"github.com/Group-project-bridgeon/Inventory-Service/internal/service"
 	"github.com/Group-project-bridgeon/Inventory-Service/internal/stock"
 	"github.com/google/uuid"
 )
@@ -165,6 +167,11 @@ func TestStockHTTPSPostingE2E(t *testing.T) {
 	if _, err := posting.Post(ctx, f.p, command(stock.In, 1, true)); !errors.Is(err, stock.ErrReferenceChanged) {
 		t.Fatal("obsolete selected pack not rejected")
 	}
+	readPool := readOnlyStockPool(t, f)
+	reads := service.NewStockReadService(NewStockReadRepository(readPool), NewWarehouseRepository(readPool), time.Second)
+	readInput := service.StockReadInput{WarehouseID: f.warehouse}
+	historyBefore, err := reads.ListMovements(ctx, readInput)
+	postingOK(t, err)
 	control(catalog, "rename")
 	if _, err := posting.Post(ctx, f.p, command(stock.In, 1, false)); !errors.Is(err, stock.ErrReferenceChanged) {
 		t.Fatal("changed revision not rejected")
@@ -175,6 +182,17 @@ func TestStockHTTPSPostingE2E(t *testing.T) {
 	}
 	auth.stop()
 	catalog.stop()
+	historyAfter, err := reads.ListMovements(ctx, readInput)
+	postingOK(t, err)
+	if len(historyAfter.Items) != 3 || !reflect.DeepEqual(historyBefore, historyAfter) {
+		t.Fatal("durable read changed after real Catalog rename/inactivation/outage")
+	}
+	balancesAfter, err := reads.ListBalances(ctx, readInput)
+	postingOK(t, err)
+	if len(balancesAfter.Items) != 1 || balancesAfter.Items[0].OnHandPieces != 17 {
+		t.Fatal("balance read required live Catalog")
+	}
+	t.Log("stock reads preserve exact recorded snapshots after actual Catalog rename/inactivation and Auth/Catalog outage")
 	replay, err := posting.Post(ctx, f.p, receipt)
 	postingOK(t, err)
 	if !replay.Replayed {

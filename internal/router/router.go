@@ -19,16 +19,18 @@ func New(db DatabaseHealthChecker, log zerolog.Logger, cfg config.HTTPConfig) *g
 	return NewWithBusiness(db, log, cfg, nil, nil)
 }
 
-func NewWithBusiness(db DatabaseHealthChecker, log zerolog.Logger, cfg config.HTTPConfig, verifier *security.Verifier, warehouses repository.WarehouseRepository) *gin.Engine {
+func NewWithBusiness(db DatabaseHealthChecker, log zerolog.Logger, cfg config.HTTPConfig, verifier *security.Verifier, warehouses repository.WarehouseRepository, reads ...*service.StockReadService) *gin.Engine {
 	r := gin.New()
 	_ = r.SetTrustedProxies(nil)
 	r.Use(middleware.RequestLogger(log, cfg.SlowRequestThreshold), middleware.Recovery(log), middleware.MaxBodyBytes(cfg.MaxBodyBytes))
 	policy := map[string][]string{
-		"POST /api/v1/inventory/warehouses":             {"inventory.warehouses:create"},
-		"GET /api/v1/inventory/warehouses":              {"inventory.warehouses:read"},
-		"GET /api/v1/inventory/warehouses/:id":          {"inventory.warehouses:read"},
-		"PUT /api/v1/inventory/warehouses/:id":          {"inventory.warehouses:update"},
-		"PATCH /api/v1/inventory/warehouses/:id/status": {"inventory.warehouses:update"},
+		"POST /api/v1/inventory/warehouses":                    {"inventory.warehouses:create"},
+		"GET /api/v1/inventory/warehouses":                     {"inventory.warehouses:read"},
+		"GET /api/v1/inventory/warehouses/:id":                 {"inventory.warehouses:read"},
+		"PUT /api/v1/inventory/warehouses/:id":                 {"inventory.warehouses:update"},
+		"PATCH /api/v1/inventory/warehouses/:id/status":        {"inventory.warehouses:update"},
+		"GET /api/v1/inventory/warehouses/:id/stock-balances":  {"inventory.stock-balances:read"},
+		"GET /api/v1/inventory/warehouses/:id/stock-movements": {"inventory.stock-movements:read"},
 	}
 	r.Use(security.Protect(verifier, policy))
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "inventory"}) })
@@ -49,6 +51,11 @@ func NewWithBusiness(db DatabaseHealthChecker, log zerolog.Logger, cfg config.HT
 		g.GET("/:id", h.GetByID)
 		g.PUT("/:id", h.Update)
 		g.PATCH("/:id/status", h.SetActive)
+		if len(reads) == 1 && reads[0] != nil {
+			h := handler.NewStockReadHandler(reads[0])
+			g.GET("/:id/stock-balances", h.ListBalances)
+			g.GET("/:id/stock-movements", h.ListMovements)
+		}
 	}
 	return r
 }

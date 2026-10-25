@@ -1838,3 +1838,54 @@ components behind that boundary. Opening stock/adjustments require explicit
 business rules. Production stock operations, stock HTTP APIs, normal provisioning
 and deployment, reservations/transfers/Kafka and the entire Stock Foundation
 remain incomplete. No implicit authorization for a further slice is created.
+
+## 18. Stock Read APIs checkpoint (2026-10-25)
+
+The user approved completing the existing read implementation, selecting exact
+GLOBAL inventory.stock-balances:read for balances and inventory.stock-movements:read
+for movements. This supersedes section 8's proposed route shapes and single-variant
+history requirement for this milestone. Historical implementation checkpoints above
+remain unchanged; read HTTP APIs are now implemented while mutation APIs remain absent.
+
+- GET /api/v1/inventory/warehouses/:id/stock-balances lists stored rows only, with
+  optional variant_id/nonzero_only. GET on the same :id branch at /stock-movements
+  lists warehouse-wide immutable history, with optional variant_id.
+- Both preserve existing human RS256/GLOBAL-only security and require their exact
+  separate permission; warehouse-read authority and machine tokens grant no access.
+  Auth migration 000008 defines the permissions without users/roles/grants. Fresh
+  human login tokens are needed after separately authorized grant changes.
+- Default page size 50, API maximum 100, SQL look-ahead maximum 101. Strict query
+  parsing rejects repeated/unknown/empty/malformed keys and invalid cursors.
+  Canonical base64url JSON cursors are at most 1024 bytes, versioned and bound to
+  endpoint/warehouse/filters; next keys use the last returned row, not look-ahead.
+- Balance order is variant_id ascending within the warehouse. History order is
+  unique movement id descending. Per-variant balance_version is not a global key;
+  neither UUIDv7 nor posted_at is advertised as commit order. Ordinary live keyset
+  limitations include changing nonzero membership and late commits sorting above
+  a traversed cursor. Static datasets traverse without gaps/duplicates; no frozen
+  snapshot or consistent cross-page reconciliation claim is made.
+- Explicit DTOs serialize all BIGINT quantities/versions as decimal strings and
+  expose recorded product/pack snapshots, not idempotency/replay/request/actor
+  metadata. There is no invented business reason. Missing warehouse is 404;
+  existing empty warehouse/filter is 200/items:[]. Inactive and historical rows
+  remain readable without Catalog access or any writes/balance initialization.
+- Inventory migration 000003 adds two complementary movement indexes for warehouse
+  and warehouse/variant keyset access. Existing migrations/ListStockHistory and
+  callers are preserved. Normal index creation can block writes while building;
+  deployment/maintenance planning remains separate. Index down drops indexes only.
+
+Source and full HTTP/filter/cursor/error/examples/manual instructions are in
+[stock-read-api.md](stock-read-api.md). Tests include a read-only PostgreSQL pool,
+int64/zero values, multi-variant/equal-time ordering, live commit barriers, exact
+human permissions and preserved historical snapshots after actual Catalog fixture
+rename/inactivation/outage. Actual commands/results, fixture cleanup, original-file
+hash preservation and full handwritten code are recorded in workspace
+review-artifacts/stock-read-api-5ea469c9f3d343469294e83f58484ec3.
+
+Only disposable migrations and generated synthetic fixtures are authorized here.
+No normal migration, accounts/grants, environment/key changes, service restart,
+commit/push/PR/merge/deploy or stock mutation workflow is included. Gateway runtime
+coverage and normal rollout remain separately unverified. Next task: specify and
+approve the first production stock workflow and its actor/producer authorization,
+reference-acquisition, error and audit contracts before implementation. Opening
+Stock, adjustments, reservations, delivery and messaging patterns remain out of scope.
