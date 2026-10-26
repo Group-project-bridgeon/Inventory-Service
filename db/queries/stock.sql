@@ -84,3 +84,6 @@ WHERE m.warehouse_id=sqlc.arg(warehouse_id)::uuid
   AND (sqlc.narg(variant_filter)::uuid IS NULL OR m.variant_id=sqlc.narg(variant_filter)::uuid)
   AND (sqlc.narg(before_id)::uuid IS NULL OR m.id<sqlc.narg(before_id)::uuid)
 ORDER BY m.id DESC LIMIT LEAST(GREATEST(sqlc.arg(page_size)::int,1),101);
+
+-- name: HasStockMovements :one
+SELECT EXISTS(SELECT 1 FROM stock_movements WHERE warehouse_id=$1 AND variant_id=$2);

@@ -92,6 +92,8 @@ func writeError(c *gin.Context, operation string, err error) {
 		logger.Respond(c, http.StatusNotFound, "warehouse_not_found", "warehouse not found")
 	case errors.Is(err, domain.ErrDuplicateCode):
 		logger.Respond(c, http.StatusConflict, "warehouse_code_exists", "warehouse code already exists")
+	case errors.Is(err, domain.ErrWarehouseHasStock):
+		logger.Respond(c, 409, "warehouse_has_stock", "warehouse has positive stock")
 	case errors.Is(err, domain.ErrDefaultConflict):
 		logger.Respond(c, http.StatusConflict, "default_warehouse_conflict", "select another active default warehouse first")
 	case errors.Is(err, domain.ErrInactiveDefault):

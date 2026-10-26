@@ -134,12 +134,21 @@ func (r *WarehouseRepository) SetActive(ctx context.Context, id uuid.UUID, activ
 	if err = q.LockWarehouses(ctx); err != nil {
 		return domain.Warehouse{}, mapErr("lock_warehouses", err)
 	}
-	current, err := q.GetWarehouse(ctx, dbID(id))
+	current, err := q.LockWarehouseStatus(ctx, dbID(id))
 	if err != nil {
 		return domain.Warehouse{}, mapErr("get_warehouse", err)
 	}
 	if current.IsDefault && !active {
 		return domain.Warehouse{}, domain.ErrDefaultConflict
+	}
+	if !active {
+		positive, e := q.WarehouseHasStock(ctx, dbID(id))
+		if e != nil {
+			return domain.Warehouse{}, mapErr("warehouse_stock", e)
+		}
+		if positive {
+			return domain.Warehouse{}, domain.ErrWarehouseHasStock
+		}
 	}
 	w, err := q.SetWarehouseStatus(ctx, sqlcdb.SetWarehouseStatusParams{ID: dbID(id), IsActive: active})
 	if err != nil {

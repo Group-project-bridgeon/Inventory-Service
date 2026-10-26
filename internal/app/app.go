@@ -39,9 +39,10 @@ func Run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// Validate/build enabled dependencies without granting any posting authority.
-	// The future workflow must explicitly receive these components.
+	// Opening Stock explicitly receives the shared reference client when enabled.
+	var references *catalogclient.Adapter
 	if cfg.StockReference.Enabled {
-		references, err := catalogclient.New(cfg.StockReference)
+		references, err = catalogclient.New(cfg.StockReference)
 		if err != nil {
 			return diagnose("configuration", "stock_reference", err)
 		}
@@ -55,7 +56,18 @@ func Run() error {
 	gin.SetMode(gin.ReleaseMode)
 	warehouses := postgres.NewWarehouseRepository(db)
 	reads := service.NewStockReadService(postgres.NewStockReadRepository(db), warehouses, cfg.Database.StatementTimeout)
-	server := &http.Server{Addr: ":" + cfg.Port, Handler: router.NewWithBusiness(db, log, cfg.HTTP, verifier, warehouses, reads), ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, ReadTimeout: cfg.HTTP.ReadTimeout, WriteTimeout: cfg.HTTP.WriteTimeout, IdleTimeout: cfg.HTTP.IdleTimeout}
+	var opening *service.OpeningStockService
+	if cfg.OpeningStockEnabled {
+		repo, e := postgres.NewStockRepositoryWithFreshness(db, postgres.DefaultStockRepositoryOptions(), references.Freshness())
+		if e != nil {
+			return e
+		}
+		opening, e = service.NewOpeningStockService(repo, references, warehouses)
+		if e != nil {
+			return e
+		}
+	}
+	server := &http.Server{Addr: ":" + cfg.Port, Handler: router.NewWithOpening(db, log, cfg.HTTP, verifier, warehouses, reads, opening), ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, ReadTimeout: cfg.HTTP.ReadTimeout, WriteTimeout: cfg.HTTP.WriteTimeout, IdleTimeout: cfg.HTTP.IdleTimeout}
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		return diagnose("http", "listen", err)

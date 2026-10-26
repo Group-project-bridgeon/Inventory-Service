@@ -233,7 +233,7 @@ func (r *StockRepository) attempt(ctx context.Context, p stock.Principal, c stoc
 		return stock.PostedResult{}, false, stock.ErrWarehouseInactive
 	}
 	stage = "header"
-	_, err = q.InsertStockOperation(ctx, db.InsertStockOperationParams{ID: dbID(c.OperationID), Producer: c.Producer, SourceEventID: dbID(c.SourceEventID), WarehouseID: dbID(c.WarehouseID), Direction: string(c.Direction), ActorUserID: dbID(p.UserID), LineCount: int16(len(c.Lines)), CommandVersion: c.CommandVersion, IdempotencyKey: dbID(c.IdempotencyKey)})
+	_, err = q.InsertStockOperation(ctx, db.InsertStockOperationParams{ID: dbID(c.OperationID), Producer: c.Producer, SourceEventID: dbID(c.SourceEventID), WarehouseID: dbID(c.WarehouseID), Direction: string(c.Direction), ActorUserID: dbID(p.UserID), LineCount: int16(len(c.Lines)), CommandVersion: c.CommandVersion, IdempotencyKey: dbID(c.IdempotencyKey), FirstRequestID: pgtype.Text{String: c.FirstRequestID, Valid: c.FirstRequestID != ""}})
 	if err != nil {
 		return fail(err)
 	}
@@ -253,6 +253,18 @@ func (r *StockRepository) attempt(ctx context.Context, p stock.Principal, c stoc
 		} // Absence after initialization is an invariant failure.
 		if !b.BaseUnitID.Valid || uuid.UUID(b.BaseUnitID.Bytes) != l.BaseUnitID {
 			return stock.PostedResult{}, false, stock.ErrReferenceChanged
+		}
+		if c.Producer == stock.OpeningProducer {
+			used, e := q.HasStockMovements(ctx, db.HasStockMovementsParams{WarehouseID: dbID(c.WarehouseID), VariantID: dbID(l.CommandLine.VariantID)})
+			if e != nil {
+				return fail(e)
+			}
+			if used || b.Version > 0 {
+				return stock.PostedResult{}, false, stock.ErrOpeningNotEligible
+			}
+			if b.Version != 0 || b.OnHandPieces != 0 {
+				return fail(stock.ErrInternal)
+			}
 		}
 		if e = validateStockChange(b, c.Direction, l.Pieces); e != nil {
 			return stock.PostedResult{}, false, e

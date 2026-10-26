@@ -27,6 +27,8 @@ const (
 type Principal struct{ UserID uuid.UUID }
 
 type Command struct {
+	// Execution metadata excluded from canonical intent.
+	FirstRequestID string
 	OperationID    uuid.UUID
 	SourceEventID  uuid.UUID
 	Producer       string
@@ -68,6 +70,12 @@ func (line CommandLine) validate() error {
 }
 
 func (c Command) Validate() error {
+	if len(c.FirstRequestID) > 64 {
+		return ErrInvalidArgument
+	}
+	if c.Producer == OpeningProducer && (c.Direction != In || c.SourceEventID != c.OperationID) {
+		return ErrInvalidArgument
+	}
 	if c.OperationID == uuid.Nil || c.SourceEventID == uuid.Nil || c.WarehouseID == uuid.Nil {
 		return fmt.Errorf("operation references: %w", ErrInvalidArgument)
 	}

@@ -43,11 +43,11 @@ Domain slice 1, schema/SQL slice 2 and internal posting slice 3 are authorized a
 
 ## Unresolved: ask before schema or business implementation
 
-- Opening stock posting, correction/reversal workflow, effective dates and operational audit/recovery details.
+- Opening Stock technical implementation/release review (business decisions now recorded below); correction/reversal workflow and operational audit/recovery details for later workflows.
 - Adjustment reasons and approval requirements.
 - Reservation, release and transfer semantics when introduced.
 
-Whole pieces, Catalog ownership of piece/pack metadata, pack-to-piece conversion, inactive-reference blocking at check time (R1), nonnegative balances, immutable posted movements, atomic posting and duplicate prevention are confirmed above. Opening stock, correction workflow, dates, approvals, reservations and transfers require later workflow decisions. Remaining technical slices require review before implementation.
+Whole pieces, Catalog ownership of piece/pack metadata, pack-to-piece conversion, inactive-reference blocking at check time (R1), nonnegative balances, immutable posted movements, atomic posting and duplicate prevention are confirmed above. Opening Stock decisions are recorded below; correction workflows, their dates/approvals, reservations and transfers require later decisions. Remaining technical slices require review before implementation.
 
 ## Transaction and token boundaries
 
@@ -87,3 +87,50 @@ snapshots; movement UUID order is not commit order. Auth migration 000008 adds o
 definitions and Inventory 000003 adds read indexes, applied only in disposable
 verification here. See [stock-read-api.md](stock-read-api.md) for exact filters,
 cursors, examples and manual checks. This does not enable production stock mutations.
+
+## Opening Stock specification checkpoint (2026-10-25)
+
+See [opening-stock-spec.md](opening-stock-spec.md): documentation only, ready for
+technical review. Opening Stock records physical pieces present at adoption.
+The user confirmed during specification preparation:
+
+- A warehouse/variant may be opened only before any posted movement. Returning
+  to zero after activity never restores eligibility.
+- Reject zero opening quantities; a never-used pair remains eligible for a later
+  positive opening. No zero-count completion marker is created.
+- Exact GLOBAL `inventory.opening-stock:post` authority for a verified human;
+  immediate server-time posting, no backdating or approval workflow in this slice.
+- Include a secured non-posting preparation endpoint under that same permission
+  so the caller can review real Catalog revisions before submitting intent.
+
+API details, server producer/identity mapping, transaction and SQL guard changes,
+warehouse deactivation guard, audit metadata and acceptance plan are proposals for
+implementation review, not implemented behavior. No new permission definition or
+grant exists by virtue of this document. Corrections remain later append-only work.
+The previously confirmed warehouse rule preventing deactivation with stock becomes
+a release prerequisite; current warehouse code does not yet enforce that stock check.
+
+Later operational evidence supersedes the historical rollout limitations above:
+the local rollout verified Auth 8, Catalog 3 and Inventory 3. The user now reports
+successful authenticated empty-list responses from both stock read routes through
+normal Kong; this is user-reported evidence, not a new agent-run acceptance test.
+Live secured Catalog references remain disabled and normal stock mutation routes
+remain unwired. TLS/trust, machine provisioning and explicitly authorized human
+grants remain prerequisites for enabling Opening Stock.
+
+The complete Inventory Postman collection/environment, token automation, examples
+and tests will be finalized after planned Inventory milestones. Each milestone's
+verification remains independent of that later deliverable.
+
+## Opening Stock implementation checkpoint (2026-10-26)
+
+The authorized [Opening Stock contract](opening-stock-spec.md) now has preparation
+and posting routes behind default-off `OPENING_STOCK_ENABLED`. Exact GLOBAL
+`inventory.opening-stock:post` and a verified human are required. Earlier checkpoints
+above describe their historical state; they do not imply the new source is unwired.
+Inventory migration 000004 supplies the SQL integrity backstop; Auth 000009 adds only
+the permission definition. Positive-stock warehouse deactivation is rejected under
+locks conflicting with posting. Completed authorized replay avoids Catalog; unknown
+commit never causes an automatic mutation retry. Confirmed D1-D3 and R1 are unchanged.
+Normal enablement, migrations, grants, machine provisioning and TLS changes remain
+separately authorized operational work. Disposable verification is not deployment.

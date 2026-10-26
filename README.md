@@ -180,3 +180,11 @@ Warehouse hardening verification and safe source archives: see [docs/verificatio
 ## Docker and Kong
 
 See [container instructions](docs/docker.md) and the linked Platform integration guide. Inventory is internal on port 8082; clients use Kong at localhost:8000/api/v1/inventory/warehouses.
+
+## Opening Stock
+
+See [the Opening Stock contract](docs/opening-stock-spec.md) for preparation/posting,
+replay recovery and safe verification. The implementation is default-off via
+`OPENING_STOCK_ENABLED=false`; enabling requires Inventory schema 4, Auth schema 9,
+Catalog schema 3, configured secured references and explicit human/machine grants.
+Normal enablement is separate from disposable verification.

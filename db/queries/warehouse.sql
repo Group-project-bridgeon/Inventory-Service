@@ -25,3 +25,9 @@ WHERE id = $1 RETURNING *;
 
 -- name: SetWarehouseStatus :one
 UPDATE warehouses SET is_active = $2, updated_at = now() WHERE id = $1 RETURNING *;
+
+-- name: LockWarehouseStatus :one
+SELECT * FROM warehouses WHERE id=$1 FOR UPDATE;
+
+-- name: WarehouseHasStock :one
+SELECT EXISTS(SELECT 1 FROM stock_balances WHERE warehouse_id=$1 AND on_hand_pieces>0);

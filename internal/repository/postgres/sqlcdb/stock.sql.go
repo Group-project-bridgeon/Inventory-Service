@@ -114,6 +114,22 @@ func (q *Queries) GetStockIdempotency(ctx context.Context, arg GetStockIdempoten
 	return i, err
 }
 
+const hasStockMovements = `-- name: HasStockMovements :one
+SELECT EXISTS(SELECT 1 FROM stock_movements WHERE warehouse_id=$1 AND variant_id=$2)
+`
+
+type HasStockMovementsParams struct {
+	WarehouseID pgtype.UUID
+	VariantID   pgtype.UUID
+}
+
+func (q *Queries) HasStockMovements(ctx context.Context, arg HasStockMovementsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasStockMovements, arg.WarehouseID, arg.VariantID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const initializeStockBalance = `-- name: InitializeStockBalance :exec
 
 INSERT INTO stock_balances (warehouse_id,variant_id,base_unit_id)

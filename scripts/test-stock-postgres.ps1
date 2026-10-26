@@ -1,6 +1,6 @@
 #Requires -Version 7.4
 [CmdletBinding()]
-param([switch]$PostingOnly)
+param([switch]$PostingOnly,[switch]$OpeningOnly)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $run = 'inventory-stock-test-' + [guid]::NewGuid().ToString('N')
@@ -78,9 +78,19 @@ try {
     $env:STOCK_TEST_DATABASE_URL = "postgres://inventory_stock_fixture:$($env:POSTGRES_PASSWORD)@127.0.0.1:$port/inventory_stock_test?sslmode=disable"
     $env:STOCK_TEST_RUN_ID = $run
     $env:STOCK_TEST_PORT = $port
-    $testPattern = if ($PostingOnly) { '^TestStockPosting' } else { '^TestStock(SQL|Posting)' }
+    if ($OpeningOnly) { Migrate @('up'); AssertSQL "SELECT version::text || ':' || dirty::text FROM schema_migrations" '4:false' 'opening schema clean' }
+    $testPattern = if ($OpeningOnly) { '^Test(Opening|StockPosting|StockFreshness)' } elseif ($PostingOnly) { '^TestStockPosting' } else { '^TestStock(SQL|Posting)' }
     & go -C $root test -count=1 -timeout=180s -v ./internal/repository/postgres -run $testPattern
     if ($LASTEXITCODE -ne 0) { throw 'Focused stock SQL tests failed; fixture cleanup will run' }
+    if ($OpeningOnly) {
+        $movements=SQL 'SELECT count(*) FROM stock_movements'
+        Migrate @('down','1')
+        AssertSQL 'SELECT count(*) FROM stock_movements' $movements 'opening down preserves posted history'
+        Migrate @('up','1')
+        AssertSQL "SELECT version::text || ':' || dirty::text FROM schema_migrations" '4:false' 'opening reapply clean'
+        Write-Host 'PASS: opening guards, persistence, concurrency and recovery verified.'
+        return
+    }
     # Exercise destructive rollback with posted fixture data too, then reapply.
     Migrate @('down','1')
     AssertSQL "SELECT count(*) FROM warehouses WHERE code='SLICE2-BASELINE'" '1' 'populated stock rollback preserves warehouse data'

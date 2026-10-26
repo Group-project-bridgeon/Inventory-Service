@@ -18,6 +18,7 @@ type HTTPConfig struct {
 	SlowRequestThreshold, ReadinessTimeout, ReadHeaderTimeout, ReadTimeout, WriteTimeout, IdleTimeout, ShutdownTimeout time.Duration
 }
 type Config struct {
+	OpeningStockEnabled                      bool
 	StockReference                           catalogclient.Config
 	Port                                     string
 	DatabaseURL                              string
@@ -103,6 +104,16 @@ func Load() (*Config, error) {
 	c.StockReference, err = catalogclient.LoadConfig()
 	if err != nil {
 		return nil, err
+	}
+	switch os.Getenv("OPENING_STOCK_ENABLED") {
+	case "", "false":
+	case "true":
+		c.OpeningStockEnabled = true
+	default:
+		return nil, fmt.Errorf("invalid OPENING_STOCK_ENABLED")
+	}
+	if c.OpeningStockEnabled && !c.StockReference.Enabled {
+		return nil, fmt.Errorf("opening stock requires STOCK_REFERENCE_ENABLED")
 	}
 	return c, nil
 }

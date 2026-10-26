@@ -137,6 +137,10 @@ func (a *Adapter) Resolve(ctx context.Context, command stock.Command) ([]stock.O
 		}
 		items = append(items, item)
 	}
+	return a.fetch(ctx, items, command.Lines, false)
+}
+
+func (a *Adapter) fetch(ctx context.Context, items []requestItem, lines []stock.CommandLine, preparing bool) ([]stock.Observation, error) {
 	body, err := json.Marshal(struct {
 		Items []requestItem `json:"items"`
 	}{items})
@@ -186,13 +190,16 @@ func (a *Adapter) Resolve(ctx context.Context, command stock.Command) ([]stock.O
 		if !jsonResponse(response) {
 			return nil, ErrMalformed
 		}
-		return a.decode(ctx, data, command)
+		return a.decodeLines(ctx, data, lines, preparing)
 	}
 	return nil, ErrUnauthorized
 }
 func (a *Adapter) decode(ctx context.Context, data []byte, command stock.Command) ([]stock.Observation, error) {
+	return a.decodeLines(ctx, data, command.Lines, false)
+}
+func (a *Adapter) decodeLines(ctx context.Context, data []byte, lines []stock.CommandLine, preparing bool) ([]stock.Observation, error) {
 	var batch wireBatch
-	if strictjson.Decode(data, &batch) != nil || batch.Checked.IsZero() || len(batch.Items) != len(command.Lines) {
+	if strictjson.Decode(data, &batch) != nil || batch.Checked.IsZero() || len(batch.Items) != len(lines) {
 		return nil, ErrMalformed
 	}
 	if !requiredReferenceFields(data) {
@@ -200,7 +207,7 @@ func (a *Adapter) decode(ctx context.Context, data []byte, command stock.Command
 	}
 	byID := map[uuid.UUID]wireItem{}
 	requested := map[uuid.UUID]stock.CommandLine{}
-	for _, l := range command.Lines {
+	for _, l := range lines {
 		requested[l.VariantID] = l
 	}
 	for _, item := range batch.Items {
@@ -216,8 +223,8 @@ func (a *Adapter) decode(ctx context.Context, data []byte, command stock.Command
 		}
 		byID[id] = item
 	}
-	observations := make([]stock.Observation, 0, len(command.Lines))
-	for _, line := range command.Lines {
+	observations := make([]stock.Observation, 0, len(lines))
+	for _, line := range lines {
 		item := byID[line.VariantID]
 		switch item.Status {
 		case "ok":
@@ -252,7 +259,7 @@ func (a *Adapter) decode(ctx context.Context, data []byte, command stock.Command
 		if !r.ProductActive || !r.VariantActive || !r.UnitActive {
 			return nil, stock.ErrReferenceInactive
 		}
-		if r.Revision != line.ExpectedStockReferenceRevision {
+		if !preparing && r.Revision != line.ExpectedStockReferenceRevision {
 			return nil, stock.ErrReferenceChanged
 		}
 		o := stock.Observation{ReferenceSnapshot: stock.ReferenceSnapshot{ProductID: product, VariantID: line.VariantID, BaseUnitID: unit, QuantityKind: r.Kind, ProductActive: r.ProductActive, VariantActive: r.VariantActive, BaseUnitActive: r.UnitActive, StockReferenceRevision: r.Revision, CheckedAt: r.Checked}, ProductCode: r.ProductCode, ProductName: r.ProductName, SKU: r.SKU, BaseUnitCode: r.UnitCode}
@@ -287,6 +294,9 @@ func (a *Adapter) decode(ctx context.Context, data []byte, command stock.Command
 			o.Pack = &stock.PackSnapshot{ID: id, VariantID: line.VariantID, Revision: p.Revision, PiecesPerPack: factor, Active: true}
 			label := p.Label
 			o.PackLabel = &label
+		}
+		if preparing {
+			line.ExpectedStockReferenceRevision = r.Revision
 		}
 		if err := o.ValidateFor(line); err != nil {
 			return nil, err
@@ -339,4 +349,23 @@ func requiredReferenceFields(data []byte) bool {
 		}
 	}
 	return true
+}
+
+// Prepare resolves selections without manufacturing posting identities/revisions.
+func (a *Adapter) Prepare(ctx context.Context, selections []stock.Selection) ([]stock.Observation, error) {
+	if err := stock.ValidateSelections(selections); err != nil {
+		return nil, err
+	}
+	items := make([]requestItem, 0, len(selections))
+	lines := make([]stock.CommandLine, 0, len(selections))
+	for _, l := range selections {
+		item := requestItem{Variant: l.VariantID.String()}
+		if l.PackID != uuid.Nil {
+			item.Pack = l.PackID.String()
+			item.PackRevision = l.PackRevision
+		}
+		items = append(items, item)
+		lines = append(lines, stock.CommandLine{LineNumber: l.LineNumber, VariantID: l.VariantID, InputCount: l.InputCount, PackID: l.PackID, PackRevision: l.PackRevision})
+	}
+	return a.fetch(ctx, items, lines, true)
 }
