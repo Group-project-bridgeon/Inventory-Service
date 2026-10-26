@@ -17,7 +17,7 @@ try{
  $mapping=([string](FixtureDocker @('port',$container,'5432/tcp'))).Trim();if($mapping -notmatch '^127\.0\.0\.1:(\d+)$'){throw 'Invalid fixture port'};$port=$Matches[1]
  $ready=$false;for($i=0;$i -lt 60;$i++){try{if((SQL 'SELECT 1') -eq '1'){$ready=$true;break}}catch{};Start-Sleep -Seconds 1};if(!$ready){throw 'Fixture readiness failed'}
  SQL "ALTER DATABASE inventory_stock_test SET stock.fixture_id='$run'"|Out-Null
- Migrate 'Inventory-Service' 'inventory_stock_test' @('up')
+ Migrate 'Inventory-Service' 'inventory_stock_test' @('up','3')
  AssertSQL "SELECT version::text||':'||dirty::text FROM schema_migrations" '3:false' 'Inventory schema version 3'
  SQL "INSERT INTO warehouses(id,code,name,is_default) VALUES ('01935f00-0000-7000-8000-000000000001','READ-DEFAULT','Synthetic default',true)"|Out-Null
  SQL 'CREATE DATABASE auth_stock_read_test'|Out-Null

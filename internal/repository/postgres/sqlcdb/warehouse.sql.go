@@ -127,6 +127,26 @@ func (q *Queries) ListWarehouses(ctx context.Context, arg ListWarehousesParams) 
 	return items, nil
 }
 
+const lockWarehouseStatus = `-- name: LockWarehouseStatus :one
+SELECT id, code, name, address, is_active, is_default, created_at, updated_at FROM warehouses WHERE id=$1 FOR UPDATE
+`
+
+func (q *Queries) LockWarehouseStatus(ctx context.Context, id pgtype.UUID) (Warehouse, error) {
+	row := q.db.QueryRow(ctx, lockWarehouseStatus, id)
+	var i Warehouse
+	err := row.Scan(
+		&i.ID,
+		&i.Code,
+		&i.Name,
+		&i.Address,
+		&i.IsActive,
+		&i.IsDefault,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const lockWarehouses = `-- name: LockWarehouses :exec
 SELECT pg_advisory_xact_lock(782341092)
 `
@@ -192,4 +212,15 @@ func (q *Queries) UpdateWarehouse(ctx context.Context, arg UpdateWarehouseParams
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const warehouseHasStock = `-- name: WarehouseHasStock :one
+SELECT EXISTS(SELECT 1 FROM stock_balances WHERE warehouse_id=$1 AND on_hand_pieces>0)
+`
+
+func (q *Queries) WarehouseHasStock(ctx context.Context, warehouseID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, warehouseHasStock, warehouseID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }

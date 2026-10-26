@@ -8,7 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"github.com/Group-project-bridgeon/Inventory-Service/internal/domain"
 	"io"
 	"net/http"
 	"net/url"
@@ -128,6 +130,14 @@ func (g *stockGateway) login(permissions []string, scope string) string {
 	g.ok(json.Unmarshal(g.request("/api/v1/auth/login", "", "actual-login", 200, map[string]string{"email": email, "password": password}), &result))
 	g.require(result.TokenType == "Bearer", "login token type")
 	claims, err := g.verifier.Verify(result.AccessToken)
+	if err != nil {
+		// Diagnose clock drift without printing the token or identity claims.
+		var timing jwt.RegisteredClaims
+		_, _, parseErr := jwt.NewParser().ParseUnverified(result.AccessToken, &timing)
+		if parseErr == nil && timing.IssuedAt != nil && timing.NotBefore != nil && timing.ExpiresAt != nil {
+			g.t.Logf("login verification timing: issued_offset_ms=%d not_before_offset_ms=%d remaining_ms=%d", time.Until(timing.IssuedAt.Time).Milliseconds(), time.Until(timing.NotBefore.Time).Milliseconds(), time.Until(timing.ExpiresAt.Time).Milliseconds())
+		}
+	}
 	g.ok(err)
 	g.require(claims.UserID == id, "login identity mismatch")
 	expected := map[string]bool{}
@@ -279,6 +289,10 @@ func TestStockReadGateway(t *testing.T) {
 	post(ids[0], stock.In, stock.CommandLine{VariantID: uuid.New(), InputCount: 1})
 	post(ids[1], stock.In, stock.CommandLine{VariantID: foreign, InputCount: 7})
 	_, e = warehouses.SetActive(ctx, ids[0], false)
+	g.require(errors.Is(e, domain.ErrWarehouseHasStock), "positive-stock deactivation must reject")
+	// Owned fixture only: model historical/legacy inactive rows without weakening
+	// the normal repository policy. Read APIs must still serve such history.
+	_, e = g.inventory.Exec(ctx, "UPDATE warehouses SET is_active=false WHERE id=$1", ids[0])
 	g.ok(e)
 	var balances, movements, operations, keys int
 	g.ok(g.inventory.QueryRow(ctx, "SELECT (SELECT count(*) FROM stock_balances),(SELECT count(*) FROM stock_movements),(SELECT count(*) FROM stock_operations),(SELECT count(*) FROM stock_idempotency WHERE state='COMPLETED')").Scan(&balances, &movements, &operations, &keys))
