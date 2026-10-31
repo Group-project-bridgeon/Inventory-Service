@@ -1,5 +1,90 @@
 # Inventory decisions
 
+Milestone 9 proposal: [Minimal Fulfillment / Delivery](fulfillment-spec.md).
+R9-A through R9-E are confirmed for implementation: exact Sales create/cancel/read
+and human GLOBAL dispatch/update/read pairs are recorded in the specification.
+Fulfillment is implemented and disposably verified; normal enablement and real
+Sales acceptance/integration remain pending.
+The existing Milestone 8 checkpoint and confirmed rules below remain unchanged.
+
+## Current Milestone 9 checkpoint
+
+Sales machines own create/cancel/read under audience inventory-fulfillment; verified
+humans use corresponding exact GLOBAL dispatch/update/read grants across Sales owners
+and warehouses. Actual human actor is separate from Sales owner; no impersonation,
+unauthorized replay or implied permissions. Draft cancellation leaves the reservation
+unchanged and requires a separate owned Sales release. FAILED outcome stays DISPATCHED;
+DELIVERED is terminal. Neither outcome restores or deducts stock.
+
+Dispatch composes the existing consume work and fulfillment audit/result in one
+caller-owned transaction; it deducts the full hold once. Standalone consume cannot
+bypass a live draft. Inventory000007 / Auth000012 are additive; old migrations and
+replay formats remain preserved. Stock human consume v4 and internal reservation
+intent v2 are explicit new versions. Fulfillment result/fingerprint use v1.
+
+Schema7 must precede compatible binaries using new reservation columns/guards;
+Auth12 is required for fulfillment authority. Default STOCK_FULFILLMENT_ENABLED=false;
+no normal enablement, migrations, grants or service changes occurred. Kafka/Outbox/
+Inbox/Saga remains Milestone10; final Inventory Postman delivery stays deferred.
+Earlier checkpoints below record their historical milestone scope.
+
+Milestone 8 proposal: [Inventory Reservations](stock-reservations-spec.md).
+R8-A/B/D are confirmed; R8-C requires Sales to confirm reserve before cancellation.
+The approved lifecycle/security contract is recorded there; implementation and disposable verification are complete. Sales adoption remains
+proposed; normal enablement and real Sales integration are pending.
+The existing adjustment implementation and historical checkpoints below are preserved.
+
+[Stock Adjustments and Corrections](stock-adjustments-spec.md): D1–D3 confirmed on
+2026-10-26. Positive IN/OUT deltas and one-time whole-operation reversals require
+exact direction authority, mandatory reason and trimmed explanation. Reversals also
+require reverse authority and current active/eligible references, while preserving
+original quantities/factors. Physical-count reconciliation remains unimplemented.
+Earlier checkpoints below retain their historical implementation/operational status.
+
+## Current Milestone 8 checkpoint — implemented / disposable-verified
+
+Reservations are machine-owned, direct-piece, all-or-nothing holds. available equals
+on-hand minus reserved; reserve/release change holds only, while consume atomically
+clears its hold and writes the physical OUT ledger, operation, audit and both durable
+results. Ordinary OUT adjustments/decreasing reversals cannot spend held stock.
+Warehouse deactivation respects stock and outstanding holds. Physical balance
+`version` and `reservation_version` remain separate; compare both for availability.
+
+Sales must confirm reserve before cancellation. Early release rejects with no writes
+or tombstone. Terminal generations cannot reopen; only the next generation after a
+confirmed release may open with matching head versions. Consumed orders are closed
+in this MVP. Sales must retain cancellation intent and reconcile uncertain reserve
+outcomes with original IDs/key before confirming release. No automatic mutation
+retry after uncertain commit, implicit expiry or human reservation override exists.
+
+New reserve/consume require active warehouse and fresh current active/eligible
+Catalog references under R1 (5s maximum age / 1s future allowance, active-at-check
+only). Owned release, authorized status and completed replay need no fresh Catalog
+check. Exact reservation machine audience/scopes are approved in the linked spec;
+Catalog and human JWTs remain separate. Revocation prevents future issuance; signed
+machine JWTs can survive expiry plus <=30s tolerance, issued lifetime <=5 minutes.
+
+Inventory 000006 must precede this binary even when STOCK_RESERVATIONS_ENABLED is
+false; Auth 000011 is needed for the new exact machine grant pairs. The flag defaults
+off. No normal migrations, data, grants, provisioning, services or TLS are changed.
+Normal enablement, normal Opening/adjustment acceptance and real Sales integration
+remain pending. Earlier checkpoints below preserve the historical scope of each
+slice; their former pending statements do not override this current checkpoint.
+
+## Previous implementation checkpoint — Stock Adjustments and Corrections
+
+The approved positive IN/OUT adjustments and one-time whole-operation reversals are
+implemented and disposable-verified. New command/fingerprint v2 preserves v1 replay
+and durable result v1. Inventory migration 000005 adds immutable audit/linkage and
+whole-reversal guards; Auth 000010 adds the three approved definitions only.
+The new `STOCK_ADJUSTMENTS_ENABLED` gate defaults off. Migration 5 must precede this
+application release even when posting is off, because movement history joins audit.
+No normal data/configuration, grants, credentials or services were changed. The real
+disposable Auth/Kong/HTTPS Catalog flow and PostgreSQL regressions passed; normal
+Opening Stock posting/replay remains pending. Physical counts and the final Inventory
+Postman deliverable remain unimplemented. See the linked specification for contracts,
+rollout prerequisites, verification limits and protected cleanup evidence.
+
 ## Confirmed scope
 
 Inventory owns inventory_db and connects as inventory_service. Product and variant master data belongs to Catalog. Application routes implement warehouse management and authenticated stock balance/movement reads. Stock domain types, migration 000002, generated queries and the internal transactional posting service/repository are implemented. Posting has no production wiring; stock mutation HTTP routes remain absent. See [stock-read-api.md](stock-read-api.md) and [stock-foundation-spec.md](stock-foundation-spec.md), sections 15 and 18. Reservations, transfers, bins/racks, fulfillment and Kafka remain later work. Exact GET /health and GET /ready remain public.

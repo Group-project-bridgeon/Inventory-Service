@@ -7,16 +7,19 @@ import (
 )
 
 type StockBalanceView struct {
-	WarehouseID  uuid.UUID
-	VariantID    uuid.UUID
-	BaseUnitID   uuid.UUID
-	OnHandPieces int64
-	Version      int64
-	UpdatedAt    time.Time
+	ReservedPieces, AvailablePieces, ReservationVersion int64
+	WarehouseID                                         uuid.UUID
+	VariantID                                           uuid.UUID
+	BaseUnitID                                          uuid.UUID
+	OnHandPieces                                        int64
+	Version                                             int64
+	UpdatedAt                                           time.Time
 }
 
 // StockMovementView contains durable posting facts, never live Catalog metadata.
 type StockMovementView struct {
+	ReasonCode, Explanation                                                       *string
+	OriginalOperationID                                                           *uuid.UUID
 	ID, OperationID, WarehouseID, VariantID                                       uuid.UUID
 	Direction                                                                     string
 	InputCount, PiecesPerInput, Pieces, BeforePieces, AfterPieces, BalanceVersion int64

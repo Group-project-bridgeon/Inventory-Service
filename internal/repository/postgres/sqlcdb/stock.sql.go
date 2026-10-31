@@ -12,8 +12,8 @@ import (
 )
 
 const claimStockIdempotency = `-- name: ClaimStockIdempotency :execrows
-INSERT INTO stock_idempotency (producer,key,fingerprint_version,request_hash,actor_user_id,operation_id)
-VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (producer,key) DO NOTHING
+INSERT INTO stock_idempotency (producer,key,fingerprint_version,request_hash,actor_user_id,operation_id,actor_kind,actor_machine_id)
+VALUES ($1,$2,$3,$4,$5,$6,COALESCE(NULLIF($7::text,''),'HUMAN'),$8::uuid) ON CONFLICT (producer,key) DO NOTHING
 `
 
 type ClaimStockIdempotencyParams struct {
@@ -23,6 +23,8 @@ type ClaimStockIdempotencyParams struct {
 	RequestHash        []byte
 	ActorUserID        pgtype.UUID
 	OperationID        pgtype.UUID
+	ActorKind          string
+	ActorMachineID     pgtype.UUID
 }
 
 func (q *Queries) ClaimStockIdempotency(ctx context.Context, arg ClaimStockIdempotencyParams) (int64, error) {
@@ -33,6 +35,8 @@ func (q *Queries) ClaimStockIdempotency(ctx context.Context, arg ClaimStockIdemp
 		arg.RequestHash,
 		arg.ActorUserID,
 		arg.OperationID,
+		arg.ActorKind,
+		arg.ActorMachineID,
 	)
 	if err != nil {
 		return 0, err
@@ -62,8 +66,121 @@ func (q *Queries) CompleteStockIdempotency(ctx context.Context, arg CompleteStoc
 	return result.RowsAffected(), nil
 }
 
+const consumeReservedStock = `-- name: ConsumeReservedStock :one
+UPDATE stock_balances SET reserved_pieces=reserved_pieces-$1::bigint,
+on_hand_pieces=on_hand_pieces-$1::bigint,reservation_version=reservation_version+1,
+version=version+1,updated_at=now()
+WHERE warehouse_id=$2 AND variant_id=$3
+AND $1::bigint>0 AND reserved_pieces>=$1::bigint AND on_hand_pieces>=$1::bigint
+AND version<9223372036854775807 AND reservation_version<9223372036854775807 RETURNING warehouse_id, variant_id, base_unit_id, on_hand_pieces, version, created_at, updated_at, reserved_pieces, reservation_version
+`
+
+type ConsumeReservedStockParams struct {
+	Pieces      int64
+	WarehouseID pgtype.UUID
+	VariantID   pgtype.UUID
+}
+
+// Atomic own-hold release plus physical issue; never a separate release commit.
+func (q *Queries) ConsumeReservedStock(ctx context.Context, arg ConsumeReservedStockParams) (StockBalance, error) {
+	row := q.db.QueryRow(ctx, consumeReservedStock, arg.Pieces, arg.WarehouseID, arg.VariantID)
+	var i StockBalance
+	err := row.Scan(
+		&i.WarehouseID,
+		&i.VariantID,
+		&i.BaseUnitID,
+		&i.OnHandPieces,
+		&i.Version,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ReservedPieces,
+		&i.ReservationVersion,
+	)
+	return i, err
+}
+
+const getOriginalStockLines = `-- name: GetOriginalStockLines :many
+SELECT id, operation_id, line_number, warehouse_id, variant_id, balance_version, direction, input_count, pieces_per_input, pieces, before_pieces, after_pieces, product_id, base_unit_id, pack_id, pack_revision, product_code, product_name, sku, base_unit_code, pack_label, stock_reference_revision, reference_checked_at FROM stock_movements WHERE operation_id=$1 ORDER BY line_number
+`
+
+func (q *Queries) GetOriginalStockLines(ctx context.Context, operationID pgtype.UUID) ([]StockMovement, error) {
+	rows, err := q.db.Query(ctx, getOriginalStockLines, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StockMovement
+	for rows.Next() {
+		var i StockMovement
+		if err := rows.Scan(
+			&i.ID,
+			&i.OperationID,
+			&i.LineNumber,
+			&i.WarehouseID,
+			&i.VariantID,
+			&i.BalanceVersion,
+			&i.Direction,
+			&i.InputCount,
+			&i.PiecesPerInput,
+			&i.Pieces,
+			&i.BeforePieces,
+			&i.AfterPieces,
+			&i.ProductID,
+			&i.BaseUnitID,
+			&i.PackID,
+			&i.PackRevision,
+			&i.ProductCode,
+			&i.ProductName,
+			&i.Sku,
+			&i.BaseUnitCode,
+			&i.PackLabel,
+			&i.StockReferenceRevision,
+			&i.ReferenceCheckedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getOriginalStockOperation = `-- name: GetOriginalStockOperation :one
+SELECT id, producer, source_event_id, warehouse_id, direction, actor_user_id, line_count, command_version, idempotency_key, posted_at, first_request_id, actor_kind, actor_machine_id FROM stock_operations WHERE id=$1 AND warehouse_id=$2
+`
+
+type GetOriginalStockOperationParams struct {
+	ID          pgtype.UUID
+	WarehouseID pgtype.UUID
+}
+
+// Original facts are immutable; bounded service calls read only the eligible
+// warehouse header and at most 100 lines. No Catalog call or database lock here.
+func (q *Queries) GetOriginalStockOperation(ctx context.Context, arg GetOriginalStockOperationParams) (StockOperation, error) {
+	row := q.db.QueryRow(ctx, getOriginalStockOperation, arg.ID, arg.WarehouseID)
+	var i StockOperation
+	err := row.Scan(
+		&i.ID,
+		&i.Producer,
+		&i.SourceEventID,
+		&i.WarehouseID,
+		&i.Direction,
+		&i.ActorUserID,
+		&i.LineCount,
+		&i.CommandVersion,
+		&i.IdempotencyKey,
+		&i.PostedAt,
+		&i.FirstRequestID,
+		&i.ActorKind,
+		&i.ActorMachineID,
+	)
+	return i, err
+}
+
 const getStockBalance = `-- name: GetStockBalance :one
-SELECT warehouse_id, variant_id, base_unit_id, on_hand_pieces, version, created_at, updated_at FROM stock_balances WHERE warehouse_id=$1 AND variant_id=$2
+SELECT warehouse_id, variant_id, base_unit_id, on_hand_pieces, version, created_at, updated_at, reserved_pieces, reservation_version FROM stock_balances WHERE warehouse_id=$1 AND variant_id=$2
 `
 
 type GetStockBalanceParams struct {
@@ -82,12 +199,14 @@ func (q *Queries) GetStockBalance(ctx context.Context, arg GetStockBalanceParams
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ReservedPieces,
+		&i.ReservationVersion,
 	)
 	return i, err
 }
 
 const getStockIdempotency = `-- name: GetStockIdempotency :one
-SELECT producer, key, fingerprint_version, request_hash, actor_user_id, operation_id, state, result_version, result, created_at, completed_at FROM stock_idempotency WHERE producer=$1 AND key=$2
+SELECT producer, key, fingerprint_version, request_hash, actor_user_id, operation_id, state, result_version, result, created_at, completed_at, actor_kind, actor_machine_id FROM stock_idempotency WHERE producer=$1 AND key=$2
 `
 
 type GetStockIdempotencyParams struct {
@@ -110,6 +229,8 @@ func (q *Queries) GetStockIdempotency(ctx context.Context, arg GetStockIdempoten
 		&i.Result,
 		&i.CreatedAt,
 		&i.CompletedAt,
+		&i.ActorKind,
+		&i.ActorMachineID,
 	)
 	return i, err
 }
@@ -148,6 +269,27 @@ type InitializeStockBalanceParams struct {
 // complete key, then check Commit. Never hold locks across Catalog HTTP calls.
 func (q *Queries) InitializeStockBalance(ctx context.Context, arg InitializeStockBalanceParams) error {
 	_, err := q.db.Exec(ctx, initializeStockBalance, arg.WarehouseID, arg.VariantID, arg.BaseUnitID)
+	return err
+}
+
+const insertStockAudit = `-- name: InsertStockAudit :exec
+INSERT INTO stock_operation_audit(operation_id,reason_code,explanation,original_operation_id) VALUES($1,$2,$3,$4)
+`
+
+type InsertStockAuditParams struct {
+	OperationID         pgtype.UUID
+	ReasonCode          string
+	Explanation         string
+	OriginalOperationID pgtype.UUID
+}
+
+func (q *Queries) InsertStockAudit(ctx context.Context, arg InsertStockAuditParams) error {
+	_, err := q.db.Exec(ctx, insertStockAudit,
+		arg.OperationID,
+		arg.ReasonCode,
+		arg.Explanation,
+		arg.OriginalOperationID,
+	)
 	return err
 }
 
@@ -243,8 +385,8 @@ func (q *Queries) InsertStockMovement(ctx context.Context, arg InsertStockMoveme
 
 const insertStockOperation = `-- name: InsertStockOperation :one
 INSERT INTO stock_operations (id,producer,source_event_id,warehouse_id,direction,actor_user_id,
-    line_count,command_version,idempotency_key,first_request_id)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id, producer, source_event_id, warehouse_id, direction, actor_user_id, line_count, command_version, idempotency_key, posted_at, first_request_id
+    line_count,command_version,idempotency_key,first_request_id,actor_kind,actor_machine_id)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE(NULLIF($11::text,''),'HUMAN'),$12::uuid) RETURNING id, producer, source_event_id, warehouse_id, direction, actor_user_id, line_count, command_version, idempotency_key, posted_at, first_request_id, actor_kind, actor_machine_id
 `
 
 type InsertStockOperationParams struct {
@@ -258,6 +400,8 @@ type InsertStockOperationParams struct {
 	CommandVersion int16
 	IdempotencyKey pgtype.UUID
 	FirstRequestID pgtype.Text
+	ActorKind      string
+	ActorMachineID pgtype.UUID
 }
 
 func (q *Queries) InsertStockOperation(ctx context.Context, arg InsertStockOperationParams) (StockOperation, error) {
@@ -272,6 +416,8 @@ func (q *Queries) InsertStockOperation(ctx context.Context, arg InsertStockOpera
 		arg.CommandVersion,
 		arg.IdempotencyKey,
 		arg.FirstRequestID,
+		arg.ActorKind,
+		arg.ActorMachineID,
 	)
 	var i StockOperation
 	err := row.Scan(
@@ -286,6 +432,8 @@ func (q *Queries) InsertStockOperation(ctx context.Context, arg InsertStockOpera
 		&i.IdempotencyKey,
 		&i.PostedAt,
 		&i.FirstRequestID,
+		&i.ActorKind,
+		&i.ActorMachineID,
 	)
 	return i, err
 }
@@ -294,9 +442,9 @@ const issueStockPieces = `-- name: IssueStockPieces :one
 UPDATE stock_balances SET on_hand_pieces=on_hand_pieces-$1::bigint,
     version=version+1,updated_at=now()
 WHERE warehouse_id=$2 AND variant_id=$3
-  AND $1::bigint>0 AND on_hand_pieces>=$1::bigint
+  AND $1::bigint>0 AND on_hand_pieces-reserved_pieces>=$1::bigint
   AND version<9223372036854775807
-RETURNING warehouse_id, variant_id, base_unit_id, on_hand_pieces, version, created_at, updated_at
+RETURNING warehouse_id, variant_id, base_unit_id, on_hand_pieces, version, created_at, updated_at, reserved_pieces, reservation_version
 `
 
 type IssueStockPiecesParams struct {
@@ -316,12 +464,14 @@ func (q *Queries) IssueStockPieces(ctx context.Context, arg IssueStockPiecesPara
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ReservedPieces,
+		&i.ReservationVersion,
 	)
 	return i, err
 }
 
 const listStockBalances = `-- name: ListStockBalances :many
-SELECT warehouse_id, variant_id, base_unit_id, on_hand_pieces, version, created_at, updated_at FROM stock_balances
+SELECT warehouse_id, variant_id, base_unit_id, on_hand_pieces, version, created_at, updated_at, reserved_pieces, reservation_version FROM stock_balances
 WHERE (warehouse_id,variant_id)>($1::uuid,$2::uuid)
   AND ($3::uuid IS NULL OR warehouse_id=$3::uuid)
   AND ($4::uuid IS NULL OR variant_id=$4::uuid)
@@ -362,6 +512,8 @@ func (q *Queries) ListStockBalances(ctx context.Context, arg ListStockBalancesPa
 			&i.Version,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ReservedPieces,
+			&i.ReservationVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -475,8 +627,9 @@ func (q *Queries) ListStockHistory(ctx context.Context, arg ListStockHistoryPara
 }
 
 const listWarehouseStockMovements = `-- name: ListWarehouseStockMovements :many
-SELECT m.id, m.operation_id, m.line_number, m.warehouse_id, m.variant_id, m.balance_version, m.direction, m.input_count, m.pieces_per_input, m.pieces, m.before_pieces, m.after_pieces, m.product_id, m.base_unit_id, m.pack_id, m.pack_revision, m.product_code, m.product_name, m.sku, m.base_unit_code, m.pack_label, m.stock_reference_revision, m.reference_checked_at, o.posted_at
+SELECT m.id, m.operation_id, m.line_number, m.warehouse_id, m.variant_id, m.balance_version, m.direction, m.input_count, m.pieces_per_input, m.pieces, m.before_pieces, m.after_pieces, m.product_id, m.base_unit_id, m.pack_id, m.pack_revision, m.product_code, m.product_name, m.sku, m.base_unit_code, m.pack_label, m.stock_reference_revision, m.reference_checked_at, o.posted_at,a.reason_code,a.explanation,a.original_operation_id
 FROM stock_movements m JOIN stock_operations o ON o.id=m.operation_id
+LEFT JOIN stock_operation_audit a ON a.operation_id=o.id
 WHERE m.warehouse_id=$1::uuid
   AND ($2::uuid IS NULL OR m.variant_id=$2::uuid)
   AND ($3::uuid IS NULL OR m.id<$3::uuid)
@@ -515,6 +668,9 @@ type ListWarehouseStockMovementsRow struct {
 	StockReferenceRevision string
 	ReferenceCheckedAt     pgtype.Timestamptz
 	PostedAt               pgtype.Timestamptz
+	ReasonCode             pgtype.Text
+	Explanation            pgtype.Text
+	OriginalOperationID    pgtype.UUID
 }
 
 // Live warehouse history: immutable unique movement ID is the ordering key,
@@ -558,6 +714,9 @@ func (q *Queries) ListWarehouseStockMovements(ctx context.Context, arg ListWareh
 			&i.StockReferenceRevision,
 			&i.ReferenceCheckedAt,
 			&i.PostedAt,
+			&i.ReasonCode,
+			&i.Explanation,
+			&i.OriginalOperationID,
 		); err != nil {
 			return nil, err
 		}
@@ -570,7 +729,7 @@ func (q *Queries) ListWarehouseStockMovements(ctx context.Context, arg ListWareh
 }
 
 const lockStockBalance = `-- name: LockStockBalance :one
-SELECT warehouse_id, variant_id, base_unit_id, on_hand_pieces, version, created_at, updated_at FROM stock_balances WHERE warehouse_id=$1 AND variant_id=$2 FOR UPDATE
+SELECT warehouse_id, variant_id, base_unit_id, on_hand_pieces, version, created_at, updated_at, reserved_pieces, reservation_version FROM stock_balances WHERE warehouse_id=$1 AND variant_id=$2 FOR UPDATE
 `
 
 type LockStockBalanceParams struct {
@@ -589,6 +748,8 @@ func (q *Queries) LockStockBalance(ctx context.Context, arg LockStockBalancePara
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ReservedPieces,
+		&i.ReservationVersion,
 	)
 	return i, err
 }
@@ -615,7 +776,7 @@ UPDATE stock_balances SET on_hand_pieces=on_hand_pieces+$1::bigint,
 WHERE warehouse_id=$2 AND variant_id=$3
   AND $1::bigint>0 AND version<9223372036854775807
   AND on_hand_pieces::numeric+$1::numeric<=9223372036854775807
-RETURNING warehouse_id, variant_id, base_unit_id, on_hand_pieces, version, created_at, updated_at
+RETURNING warehouse_id, variant_id, base_unit_id, on_hand_pieces, version, created_at, updated_at, reserved_pieces, reservation_version
 `
 
 type ReceiveStockPiecesParams struct {
@@ -635,6 +796,8 @@ func (q *Queries) ReceiveStockPieces(ctx context.Context, arg ReceiveStockPieces
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ReservedPieces,
+		&i.ReservationVersion,
 	)
 	return i, err
 }

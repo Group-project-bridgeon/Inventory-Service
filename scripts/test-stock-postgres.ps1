@@ -1,6 +1,6 @@
 #Requires -Version 7.4
 [CmdletBinding()]
-param([switch]$PostingOnly,[switch]$OpeningOnly)
+param([switch]$PostingOnly,[switch]$OpeningOnly,[switch]$AdjustmentsOnly)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $run = 'inventory-stock-test-' + [guid]::NewGuid().ToString('N')
@@ -78,24 +78,46 @@ try {
     $env:STOCK_TEST_DATABASE_URL = "postgres://inventory_stock_fixture:$($env:POSTGRES_PASSWORD)@127.0.0.1:$port/inventory_stock_test?sslmode=disable"
     $env:STOCK_TEST_RUN_ID = $run
     $env:STOCK_TEST_PORT = $port
-    if ($OpeningOnly) { Migrate @('up'); AssertSQL "SELECT version::text || ':' || dirty::text FROM schema_migrations" '4:false' 'opening schema clean' }
-    $testPattern = if ($OpeningOnly) { '^Test(Opening|StockPosting|StockFreshness)' } elseif ($PostingOnly) { '^TestStockPosting' } else { '^TestStock(SQL|Posting)' }
-    & go -C $root test -count=1 -timeout=180s -v ./internal/repository/postgres -run $testPattern
+    # Generated bindings target the latest schema; legacy 2 up/down was checked above.
+    Migrate @('up')
+    AssertSQL "SELECT version::text || ':' || dirty::text FROM schema_migrations" '7:false' 'current posting schema clean'
+    if ($AdjustmentsOnly) {
+        Migrate @('up')
+        AssertSQL "SELECT version::text || ':' || dirty::text FROM schema_migrations" '7:false' 'adjustment schema clean'
+        Migrate @('down','1')
+        Migrate @('up','1')
+        AssertSQL "SELECT version::text || ':' || dirty::text FROM schema_migrations" '7:false' 'empty reservation down/up with adjustment baseline clean'
+    }
+    $testPattern = if ($AdjustmentsOnly) { '^Test(Adjustment|Opening|StockPosting|StockFreshness)' } elseif ($OpeningOnly) { '^Test(Opening|StockPosting|StockFreshness)' } elseif ($PostingOnly) { '^TestStockPosting' } else { '^TestStock(SQL|Posting|Freshness)' }
+    & go -C $root test -p=1 -count=1 -timeout=180s -v ./internal/repository/postgres -run $testPattern
     if ($LASTEXITCODE -ne 0) { throw 'Focused stock SQL tests failed; fixture cleanup will run' }
+    if ($AdjustmentsOnly) {
+        Migrate @('down','1') # Empty fulfillment schema.
+        Migrate @('down','1') # Empty reservation schema; preserved audit is version 5.
+        $audit=SQL 'SELECT count(*) FROM stock_operation_audit'
+        $movement=SQL 'SELECT count(*) FROM stock_movements'
+        $refused=$false
+        try { Migrate @('down','1') } catch { $refused=$true }
+        if (!$refused) {throw 'Populated audit downgrade unexpectedly succeeded'}
+        AssertSQL 'SELECT count(*) FROM stock_operation_audit' $audit 'populated downgrade preserves audit'
+        AssertSQL 'SELECT count(*) FROM stock_movements' $movement 'populated downgrade preserves ledger'
+        Write-Host 'PASS: adjustments, whole reversals and all posting/Opening regressions; synthetic Catalog evidence.'
+        return
+    }
     if ($OpeningOnly) {
         $movements=SQL 'SELECT count(*) FROM stock_movements'
-        Migrate @('down','1')
+        Migrate @('goto','3')
         AssertSQL 'SELECT count(*) FROM stock_movements' $movements 'opening down preserves posted history'
-        Migrate @('up','1')
-        AssertSQL "SELECT version::text || ':' || dirty::text FROM schema_migrations" '4:false' 'opening reapply clean'
+        Migrate @('up')
+        AssertSQL "SELECT version::text || ':' || dirty::text FROM schema_migrations" '7:false' 'opening reapply clean'
         Write-Host 'PASS: opening guards, persistence, concurrency and recovery verified.'
         return
     }
     # Exercise destructive rollback with posted fixture data too, then reapply.
-    Migrate @('down','1')
+    Migrate @('goto','1')
     AssertSQL "SELECT count(*) FROM warehouses WHERE code='SLICE2-BASELINE'" '1' 'populated stock rollback preserves warehouse data'
-    Migrate @('up','1')
-    AssertSQL "SELECT version::text || ':' || dirty::text FROM schema_migrations" '2:false' 'populated rollback and reapply clean state'
+    Migrate @('up')
+    AssertSQL "SELECT version::text || ':' || dirty::text FROM schema_migrations" '7:false' 'populated rollback and current-schema reapply clean state'
     Write-Host 'PASS: isolated stock migration and SQL verification (synthetic Catalog references only).'
 } finally {
     try {

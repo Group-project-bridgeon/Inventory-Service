@@ -215,7 +215,7 @@ func (q *Queries) UpdateWarehouse(ctx context.Context, arg UpdateWarehouseParams
 }
 
 const warehouseHasStock = `-- name: WarehouseHasStock :one
-SELECT EXISTS(SELECT 1 FROM stock_balances WHERE warehouse_id=$1 AND on_hand_pieces>0)
+SELECT EXISTS(SELECT 1 FROM stock_balances WHERE warehouse_id=$1 AND (on_hand_pieces>0 OR reserved_pieces>0))
 `
 
 func (q *Queries) WarehouseHasStock(ctx context.Context, warehouseID pgtype.UUID) (bool, error) {

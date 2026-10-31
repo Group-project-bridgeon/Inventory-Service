@@ -30,4 +30,4 @@ UPDATE warehouses SET is_active = $2, updated_at = now() WHERE id = $1 RETURNING
 SELECT * FROM warehouses WHERE id=$1 FOR UPDATE;
 
 -- name: WarehouseHasStock :one
-SELECT EXISTS(SELECT 1 FROM stock_balances WHERE warehouse_id=$1 AND on_hand_pieces>0);
+SELECT EXISTS(SELECT 1 FROM stock_balances WHERE warehouse_id=$1 AND (on_hand_pieces>0 OR reserved_pieces>0));

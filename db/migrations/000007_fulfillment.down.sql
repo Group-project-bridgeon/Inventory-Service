@@ -1,0 +1,31 @@
+BEGIN;
+DO $$ BEGIN IF EXISTS(SELECT 1 FROM dispatches) OR EXISTS(SELECT 1 FROM stock_operations WHERE command_version=4) OR EXISTS(SELECT 1 FROM reservation_commands WHERE fingerprint_version=2) THEN RAISE EXCEPTION 'fulfillment history requires reviewed forward recovery';END IF;END $$;
+DO $$ DECLARE n TEXT; definition TEXT; BEGIN
+ FOREACH n IN ARRAY ARRAY['stock_assert_operation','stock_assert_adjustment','reservation_assert_consume','reservation_assert_command','reservation_guard_command'] LOOP
+ SELECT pg_get_functiondef(p.oid) INTO definition FROM pg_proc p JOIN pg_namespace s ON s.oid=p.pronamespace WHERE s.nspname='public' AND p.proname=n||'_before_fulfillment';
+ EXECUTE replace(definition,'FUNCTION public.'||n||'_before_fulfillment(','FUNCTION public.'||n||'(');
+ END LOOP;END $$;
+ALTER TABLE reservation_commands DROP CONSTRAINT reservation_command_actor_version;
+ALTER TABLE reservation_commands DROP COLUMN actor_user_id,DROP COLUMN dispatch_id;
+ALTER TABLE reservation_commands ADD CONSTRAINT reservation_commands_fingerprint_version_check CHECK(fingerprint_version=1);
+ALTER TABLE reservation_transitions DROP CONSTRAINT reservation_transition_actor;
+ALTER TABLE reservation_transitions DROP COLUMN actor_user_id,DROP COLUMN dispatch_id;
+DROP TABLE fulfillment_transitions;
+DROP TABLE fulfillment_commands;
+DROP TABLE dispatches;
+DROP FUNCTION fulfillment_check_deferred();
+DROP FUNCTION fulfillment_guard_key();
+DROP FUNCTION fulfillment_guard_projection();
+DROP FUNCTION fulfillment_assert_dispatch(UUID);
+DROP FUNCTION fulfillment_assert_command(TEXT,UUID,UUID);
+DROP FUNCTION fulfillment_expected_result(TEXT,UUID,UUID);
+DROP FUNCTION stock_assert_operation_before_fulfillment(UUID);
+DROP FUNCTION stock_assert_adjustment_before_fulfillment(UUID);
+DROP FUNCTION reservation_assert_consume_before_fulfillment(UUID);
+DROP FUNCTION reservation_assert_command_before_fulfillment(UUID,UUID);
+DROP FUNCTION reservation_guard_command_before_fulfillment();
+ALTER TABLE stock_operations DROP CONSTRAINT stock_operations_command_version_valid;
+ALTER TABLE stock_operations ADD CONSTRAINT stock_operations_command_version_valid CHECK(command_version IN(1,2,3));
+ALTER TABLE stock_idempotency DROP CONSTRAINT stock_idempotency_fingerprint_valid;
+ALTER TABLE stock_idempotency ADD CONSTRAINT stock_idempotency_fingerprint_valid CHECK(fingerprint_version IN(1,2,3) AND octet_length(request_hash)=32);
+COMMIT;

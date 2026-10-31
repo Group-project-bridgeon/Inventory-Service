@@ -17,8 +17,8 @@ try{
  $mapping=([string](FixtureDocker @('port',$container,'5432/tcp'))).Trim();if($mapping -notmatch '^127\.0\.0\.1:(\d+)$'){throw 'Invalid fixture port'};$port=$Matches[1]
  $ready=$false;for($i=0;$i -lt 60;$i++){try{if((SQL 'SELECT 1') -eq '1'){$ready=$true;break}}catch{};Start-Sleep -Seconds 1};if(!$ready){throw 'Fixture readiness failed'}
  SQL "ALTER DATABASE inventory_stock_test SET stock.fixture_id='$run'"|Out-Null
- Migrate 'Inventory-Service' 'inventory_stock_test' @('up','3')
- AssertSQL "SELECT version::text||':'||dirty::text FROM schema_migrations" '3:false' 'Inventory schema version 3'
+ Migrate 'Inventory-Service' 'inventory_stock_test' @('up')
+ AssertSQL "SELECT version::text||':'||dirty::text FROM schema_migrations" '7:false' 'Inventory schema version 7 (availability-aware reads)'
  SQL "INSERT INTO warehouses(id,code,name,is_default) VALUES ('01935f00-0000-7000-8000-000000000001','READ-DEFAULT','Synthetic default',true)"|Out-Null
  SQL 'CREATE DATABASE auth_stock_read_test'|Out-Null
  Migrate 'Authentication' 'auth_stock_read_test' @('up','7')
@@ -32,13 +32,14 @@ try{
  Migrate 'Authentication' 'auth_stock_read_test' @('up','1')
  AssertSQL "SELECT version::text||':'||dirty::text FROM schema_migrations" '8:false' 'Auth permission down/reapply clean' 'auth_stock_read_test'
  $env:STOCK_TEST_DATABASE_URL="postgres://inventory_stock_fixture:$($env:POSTGRES_PASSWORD)@127.0.0.1:$port/inventory_stock_test?sslmode=disable";$env:STOCK_TEST_RUN_ID=$run;$env:STOCK_TEST_PORT=$port;$env:STOCK_READ_ISOLATED='1'
- & go -C $root test -count=1 -timeout=240s -v ./internal/repository/postgres -run '^TestStockRead'
+ & go -C $root test -p=1 -count=1 -timeout=240s -v ./internal/repository/postgres -run '^TestStockRead'
  if($LASTEXITCODE -ne 0){throw 'Stock read disposable tests failed'}
  $count=SQL 'SELECT count(*) FROM stock_movements'
- Migrate 'Inventory-Service' 'inventory_stock_test' @('down','1')
+ # Read fixtures post v1 only, so audit is empty and guarded downgrade to 2 is safe.
+ Migrate 'Inventory-Service' 'inventory_stock_test' @('goto','2')
  AssertSQL "SELECT count(*) FROM pg_indexes WHERE indexname IN ('stock_movements_warehouse_id_desc','stock_movements_warehouse_variant_id_desc')" '0' 'index rollback removed only new indexes'
  AssertSQL 'SELECT count(*) FROM stock_movements' $count 'index rollback preserved ledger'
- Migrate 'Inventory-Service' 'inventory_stock_test' @('up','1')
+ Migrate 'Inventory-Service' 'inventory_stock_test' @('up')
  AssertSQL "SELECT count(*) FROM pg_indexes WHERE indexname IN ('stock_movements_warehouse_id_desc','stock_movements_warehouse_variant_id_desc')" '2' 'index reapply complete'
  Write-Host 'PASS: disposable stock read verification complete'
 }finally{

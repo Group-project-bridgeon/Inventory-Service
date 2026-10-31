@@ -67,7 +67,59 @@ func Run() error {
 			return e
 		}
 	}
-	server := &http.Server{Addr: ":" + cfg.Port, Handler: router.NewWithOpening(db, log, cfg.HTTP, verifier, warehouses, reads, opening), ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, ReadTimeout: cfg.HTTP.ReadTimeout, WriteTimeout: cfg.HTTP.WriteTimeout, IdleTimeout: cfg.HTTP.IdleTimeout}
+	var adjustments *service.StockAdjustmentService
+	if cfg.StockAdjustmentsEnabled {
+		repo, e := postgres.NewStockRepositoryWithFreshness(db, postgres.DefaultStockRepositoryOptions(), references.Freshness())
+		if e != nil {
+			return e
+		}
+		adjustments, e = service.NewStockAdjustmentService(repo, repo, references, warehouses)
+		if e != nil {
+			return e
+		}
+	}
+	var reservations *service.StockReservationService
+	var reservationVerifier *security.ReservationMachineVerifier
+	if cfg.StockReservationsEnabled {
+		reservationVerifier, err = security.LoadReservationMachine(cfg.JWTPublicKeyPath, cfg.JWTIssuer)
+		if err != nil {
+			return diagnose("security", "load_reservation_verifier", err)
+		}
+		repo, e := postgres.NewStockRepositoryWithFreshness(db, postgres.DefaultStockRepositoryOptions(), references.Freshness())
+		if e != nil {
+			return e
+		}
+		holds, e := postgres.NewReservationRepository(repo)
+		if e != nil {
+			return e
+		}
+		reservations, e = service.NewStockReservationService(holds, repo, references)
+		if e != nil {
+			return e
+		}
+	}
+
+	var fulfillment *service.FulfillmentService
+	var fulfillmentVerifier *security.FulfillmentMachineVerifier
+	if cfg.StockFulfillmentEnabled {
+		fulfillmentVerifier, err = security.LoadFulfillmentMachine(cfg.JWTPublicKeyPath, cfg.JWTIssuer)
+		if err != nil {
+			return diagnose("security", "fulfillment_verifier", err)
+		}
+		repo, e := postgres.NewStockRepositoryWithFreshness(db, postgres.DefaultStockRepositoryOptions(), references.Freshness())
+		if e != nil {
+			return e
+		}
+		store, e := postgres.NewFulfillmentRepository(repo)
+		if e != nil {
+			return e
+		}
+		fulfillment, e = service.NewFulfillmentService(store, references)
+		if e != nil {
+			return e
+		}
+	}
+	server := &http.Server{Addr: ":" + cfg.Port, Handler: router.NewWithFulfillment(db, log, cfg.HTTP, verifier, warehouses, reads, opening, adjustments, reservations, reservationVerifier, fulfillment, fulfillmentVerifier), ReadHeaderTimeout: cfg.HTTP.ReadHeaderTimeout, ReadTimeout: cfg.HTTP.ReadTimeout, WriteTimeout: cfg.HTTP.WriteTimeout, IdleTimeout: cfg.HTTP.IdleTimeout}
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		return diagnose("http", "listen", err)

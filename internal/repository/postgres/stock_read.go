@@ -55,6 +55,7 @@ func (r *StockReadRepository) ListBalances(
 
 	for _, row := range rows {
 		balances = append(balances, domain.StockBalanceView{
+			ReservedPieces: row.ReservedPieces, AvailablePieces: row.OnHandPieces - row.ReservedPieces, ReservationVersion: row.ReservationVersion,
 			WarehouseID:  uuid.UUID(row.WarehouseID.Bytes),
 			VariantID:    uuid.UUID(row.VariantID.Bytes),
 			BaseUnitID:   uuid.UUID(row.BaseUnitID.Bytes),
@@ -98,6 +99,18 @@ func (r *StockReadRepository) ListMovements(ctx context.Context, p repository.Li
 		if row.PackLabel.Valid {
 			label := row.PackLabel.String
 			m.PackLabel = &label
+		}
+		if row.ReasonCode.Valid {
+			v := row.ReasonCode.String
+			m.ReasonCode = &v
+		}
+		if row.Explanation.Valid {
+			v := row.Explanation.String
+			m.Explanation = &v
+		}
+		if row.OriginalOperationID.Valid {
+			v := uuid.UUID(row.OriginalOperationID.Bytes)
+			m.OriginalOperationID = &v
 		}
 		out = append(out, m)
 	}
