@@ -28,14 +28,14 @@ RETURNING *;
 UPDATE stock_balances SET on_hand_pieces=on_hand_pieces-sqlc.arg(pieces)::bigint,
     version=version+1,updated_at=now()
 WHERE warehouse_id=sqlc.arg(warehouse_id) AND variant_id=sqlc.arg(variant_id)
-  AND sqlc.arg(pieces)::bigint>0 AND on_hand_pieces>=sqlc.arg(pieces)::bigint
+  AND sqlc.arg(pieces)::bigint>0 AND on_hand_pieces-reserved_pieces>=sqlc.arg(pieces)::bigint
   AND version<9223372036854775807
 RETURNING *;
 
 -- name: InsertStockOperation :one
 INSERT INTO stock_operations (id,producer,source_event_id,warehouse_id,direction,actor_user_id,
-    line_count,command_version,idempotency_key,first_request_id)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *;
+    line_count,command_version,idempotency_key,first_request_id,actor_kind,actor_machine_id)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE(NULLIF(sqlc.arg(actor_kind)::text,''),'HUMAN'),sqlc.narg(actor_machine_id)::uuid) RETURNING *;
 
 -- name: InsertStockMovement :one
 INSERT INTO stock_movements (id,operation_id,line_number,warehouse_id,variant_id,balance_version,
@@ -46,8 +46,8 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$
 RETURNING *;
 
 -- name: ClaimStockIdempotency :execrows
-INSERT INTO stock_idempotency (producer,key,fingerprint_version,request_hash,actor_user_id,operation_id)
-VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (producer,key) DO NOTHING;
+INSERT INTO stock_idempotency (producer,key,fingerprint_version,request_hash,actor_user_id,operation_id,actor_kind,actor_machine_id)
+VALUES ($1,$2,$3,$4,$5,$6,COALESCE(NULLIF(sqlc.arg(actor_kind)::text,''),'HUMAN'),sqlc.narg(actor_machine_id)::uuid) ON CONFLICT (producer,key) DO NOTHING;
 
 -- name: GetStockIdempotency :one
 SELECT * FROM stock_idempotency WHERE producer=$1 AND key=$2;
@@ -78,8 +78,9 @@ ORDER BY m.balance_version DESC LIMIT LEAST(GREATEST(sqlc.arg(page_size)::int,1)
 -- Live warehouse history: immutable unique movement ID is the ordering key,
 -- not per-variant balance_version or transaction/commit time.
 -- name: ListWarehouseStockMovements :many
-SELECT m.*, o.posted_at
+SELECT m.*, o.posted_at,a.reason_code,a.explanation,a.original_operation_id
 FROM stock_movements m JOIN stock_operations o ON o.id=m.operation_id
+LEFT JOIN stock_operation_audit a ON a.operation_id=o.id
 WHERE m.warehouse_id=sqlc.arg(warehouse_id)::uuid
   AND (sqlc.narg(variant_filter)::uuid IS NULL OR m.variant_id=sqlc.narg(variant_filter)::uuid)
   AND (sqlc.narg(before_id)::uuid IS NULL OR m.id<sqlc.narg(before_id)::uuid)
@@ -87,3 +88,23 @@ ORDER BY m.id DESC LIMIT LEAST(GREATEST(sqlc.arg(page_size)::int,1),101);
 
 -- name: HasStockMovements :one
 SELECT EXISTS(SELECT 1 FROM stock_movements WHERE warehouse_id=$1 AND variant_id=$2);
+
+-- name: InsertStockAudit :exec
+INSERT INTO stock_operation_audit(operation_id,reason_code,explanation,original_operation_id) VALUES($1,$2,$3,$4);
+
+-- Original facts are immutable; bounded service calls read only the eligible
+-- warehouse header and at most 100 lines. No Catalog call or database lock here.
+-- name: GetOriginalStockOperation :one
+SELECT * FROM stock_operations WHERE id=$1 AND warehouse_id=$2;
+
+-- name: GetOriginalStockLines :many
+SELECT * FROM stock_movements WHERE operation_id=$1 ORDER BY line_number;
+
+-- Atomic own-hold release plus physical issue; never a separate release commit.
+-- name: ConsumeReservedStock :one
+UPDATE stock_balances SET reserved_pieces=reserved_pieces-sqlc.arg(pieces)::bigint,
+on_hand_pieces=on_hand_pieces-sqlc.arg(pieces)::bigint,reservation_version=reservation_version+1,
+version=version+1,updated_at=now()
+WHERE warehouse_id=sqlc.arg(warehouse_id) AND variant_id=sqlc.arg(variant_id)
+AND sqlc.arg(pieces)::bigint>0 AND reserved_pieces>=sqlc.arg(pieces)::bigint AND on_hand_pieces>=sqlc.arg(pieces)::bigint
+AND version<9223372036854775807 AND reservation_version<9223372036854775807 RETURNING *;

@@ -78,7 +78,16 @@ func Prepare(c Command, observations []Observation) ([]PreparedLine, error) {
 		if !ok {
 			return nil, ErrReferenceChanged
 		}
-		if err := o.ValidateFor(l); err != nil {
+		check := l
+		if c.Producer == ConsumeProducer || c.Producer == DispatchProducer {
+			check.ExpectedStockReferenceRevision = o.StockReferenceRevision
+		}
+		if c.Producer == CorrectionProducer {
+			check.PackID = [16]byte{}
+			check.PackRevision = ""
+			check.InputCount = 1
+		}
+		if err := o.ValidateFor(check); err != nil {
 			return nil, err
 		}
 		if !boundedText(o.ProductCode, 50) || !boundedText(o.ProductName, 200) || !boundedText(o.SKU, 100) || !boundedText(o.BaseUnitCode, 30) || (o.Pack == nil && o.PackLabel != nil) {
@@ -89,6 +98,20 @@ func Prepare(c Command, observations []Observation) ([]PreparedLine, error) {
 			p := *o.Pack
 			o.Pack = &p
 			factor = p.PiecesPerPack
+		}
+		if c.Producer == CorrectionProducer {
+			r, _ := c.Original.Line(l.VariantID)
+			if o.ProductID != r.ProductID || o.BaseUnitID != r.BaseUnitID {
+				return nil, ErrReferenceChanged
+			}
+			factor = r.Factor
+		}
+		if c.Producer == ConsumeProducer || c.Producer == DispatchProducer {
+			for _, saved := range c.Consume.Snapshot.Lines {
+				if saved.ReservationLine.VariantID == l.VariantID && (o.ProductID != saved.ProductID || o.BaseUnitID != saved.BaseUnitID) {
+					return nil, ErrReferenceChanged
+				}
+			}
 		}
 		if o.PackLabel != nil {
 			label := *o.PackLabel
@@ -166,12 +189,36 @@ func referenceFailure(err error) error {
 	return ErrReferenceUnavailable
 }
 
+// ReferenceFailure shares the closed safe error contract with reservation-only workflows.
+func ReferenceFailure(err error) error { return referenceFailure(err) }
+
 // Post performs no logging. The future authenticated workflow boundary owns one
 // safe zerolog event with request_id and operation_id after cleanup.
 func (s *PostingService) Post(ctx context.Context, p Principal, c Command) (PostedResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.options.TotalTimeout)
 	defer cancel()
 	c.Lines = slices.Clone(c.Lines)
+	if c.Consume != nil {
+		p := *c.Consume
+		p.Request.Lines = slices.Clone(p.Request.Lines)
+		p.Snapshot.Lines = slices.Clone(p.Snapshot.Lines)
+		c.Consume = &p
+	}
+	if c.Audit != nil {
+		a := *c.Audit
+		c.Audit = &a
+	}
+	if c.Original != nil {
+		o := *c.Original
+		o.Lines = slices.Clone(o.Lines)
+		for i := range o.Lines {
+			if o.Lines[i].PackLabel != nil {
+				v := *o.Lines[i].PackLabel
+				o.Lines[i].PackLabel = &v
+			}
+		}
+		c.Original = &o
+	}
 	fp, err := c.Fingerprint(p)
 	if err != nil {
 		return PostedResult{}, err

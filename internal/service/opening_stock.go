@@ -68,13 +68,17 @@ func (s *OpeningStockService) Prepare(ctx context.Context, cl *security.Claims, 
 	if err := (openingAuthority{cl}).Authorize(ctx, stock.Principal{UserID: cl.UserID}, stock.Command{Producer: stock.OpeningProducer, Direction: stock.In}); err != nil {
 		return nil, err
 	}
+	return prepareStockSelections(ctx, s.refs, s.warehouses, warehouse, lines)
+}
+
+func prepareStockSelections(ctx context.Context, refs OpeningReferences, warehouses repository.WarehouseRepository, warehouse uuid.UUID, lines []stock.Selection) ([]stock.PreparedLine, error) {
 	if warehouse == uuid.Nil {
 		return nil, stock.ErrInvalidArgument
 	}
 	if err := stock.ValidateSelections(lines); err != nil {
 		return nil, err
 	}
-	w, err := s.warehouses.GetByID(ctx, warehouse)
+	w, err := warehouses.GetByID(ctx, warehouse)
 	if errors.Is(err, domain.ErrNotFound) {
 		return nil, stock.ErrWarehouseNotFound
 	}
@@ -84,7 +88,7 @@ func (s *OpeningStockService) Prepare(ctx context.Context, cl *security.Claims, 
 	if !w.IsActive {
 		return nil, stock.ErrWarehouseInactive
 	}
-	observations, err := s.refs.Prepare(ctx, lines)
+	observations, err := refs.Prepare(ctx, lines)
 	if err != nil {
 		return nil, err
 	}

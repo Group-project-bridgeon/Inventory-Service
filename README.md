@@ -4,7 +4,7 @@ Inventory service for the team ERP project. Owns inventory_db; product and varia
 
 ## Implemented scope
 
-The service provides warehouse create/list/detail/update/status endpoints, UUIDv7 identifiers, cursor pagination, normalized unique codes, and an atomic single-default rule. A partial unique index and deferred trigger enforce exactly one active default at commit whenever warehouses exist. Warehouse writes use the inventory-owned PostgreSQL database through pgx and sqlc. Exact GET /health and GET /ready stay public; business routes require RS256 Auth access tokens and exact GLOBAL permissions. Warehouse-scoped stock balance and movement GET APIs are implemented; see [Stock Read APIs](docs/stock-read-api.md) for the exact permissions, filters, string quantities and live pagination limitations. Production stock mutations, reservations, transfers and bins/racks remain later work; normal rollout is separate. See [inventory-rules.md](docs/inventory-rules.md) and the [warehouse specification](docs/warehouse-implementation-spec.md).
+The service provides warehouse create/list/detail/update/status endpoints, UUIDv7 identifiers, cursor pagination, normalized unique codes, and an atomic single-default rule. A partial unique index and deferred trigger enforce exactly one active default at commit whenever warehouses exist. Warehouse writes use the inventory-owned PostgreSQL database through pgx and sqlc. Exact GET /health and GET /ready stay public; human business routes require RS256 Auth access tokens and exact GLOBAL permissions; reservation and Sales fulfillment routes use separate machine audiences and exact scopes. Warehouse-scoped stock balance and movement GET APIs are implemented; see [Stock Read APIs](docs/stock-read-api.md) for the exact permissions, filters, string quantities and live pagination limitations. Opening, adjustments/corrections, reservations and fulfillment have explicit default-off wiring; normal rollout/acceptance is separate. Transfers and bins/racks remain later work. See [inventory-rules.md](docs/inventory-rules.md) and the [warehouse specification](docs/warehouse-implementation-spec.md).
 
 ## Prerequisites and conventions
 
@@ -185,6 +185,55 @@ See [container instructions](docs/docker.md) and the linked Platform integration
 
 See [the Opening Stock contract](docs/opening-stock-spec.md) for preparation/posting,
 replay recovery and safe verification. The implementation is default-off via
-`OPENING_STOCK_ENABLED=false`; enabling requires Inventory schema 4, Auth schema 9,
+`OPENING_STOCK_ENABLED=false`; this current binary requires Inventory schema 7 even with posting off; Opening authority requires Auth schema 9 or later,
 Catalog schema 3, configured secured references and explicit human/machine grants.
 Normal enablement is separate from disposable verification.
+
+
+## Reservations (Milestone 8)
+
+[Reservation specification](docs/stock-reservations-spec.md) records the approved
+all-or-nothing, direct-piece, machine-owned reserve/full release/full consume
+workflow. The Sales-facing contract remains proposed until the Sales owner accepts
+it. No real Sales integration or normal reservation enablement is claimed.
+
+`STOCK_RESERVATIONS_ENABLED=false` by default. Enabling requires
+`STOCK_REFERENCE_ENABLED=true`, working verified HTTPS reference dependencies,
+Inventory schema 6, Auth schema 11 and separately approved machine grants/credentials.
+No application startup creates grants or runs migrations. Shared reads/posting use
+schema 6 even when the mutation gate is off. Human and Catalog-reference tokens
+cannot access reservation routes. Ordinary OUT/reversal respects reserved stock.
+
+From this repository, run `pwsh -NoProfile -File scripts/test-reservations-postgres.ps1`
+for uniquely owned disposable PostgreSQL concurrency, rollback, audit and simulated
+commit-recovery checks. From ERP-Platform run
+`pwsh -NoProfile -File scripts/test-inventory-gateway.ps1 -Reservations` for real
+Auth HTTPS machine issuance, secured Catalog and Kong acceptance. These tests use
+generated fixture material and perform no normal stock acceptance/provisioning.
+Expiry, partial workflows, human overrides and Kafka infrastructure remain deferred.
+
+
+## Minimal Fulfillment / Delivery (Milestone 9)
+
+See [Fulfillment contracts and exact Resource/Action matrix](docs/fulfillment-spec.md).
+Sales machines create/cancel/read their own drafts with audience inventory-fulfillment.
+Human GLOBAL grants permit dispatch, delivery update and reads across Sales owners/
+warehouses, recording the actual human separately from the Sales owner. There are
+no implied permissions or machine impersonation. Cancellation changes only the draft;
+Sales explicitly releases its hold. FAILED remains DISPATCHED; later DELIVERED records
+success. Delivery outcomes do not automatically restock or issue again.
+
+STOCK_FULFILLMENT_ENABLED defaults false and requires reservations plus secured Catalog
+references. Use Inventory schema7 before this binary and Auth12 before new authority/
+enablement. Dispatch reuses the consume work in one transaction with fulfillment audit
+and durable result; standalone consume cannot bypass a live draft. Older binary/
+populated schema rollback requires reviewed recovery; no normal enablement ran here.
+
+Run `pwsh -NoProfile -File scripts/test-fulfillment-postgres.ps1` here for real isolated
+PostgreSQL lifecycle/race/rollback/recovery and legacy regressions. Run
+`pwsh -NoProfile -File scripts/test-inventory-gateway.ps1 -Fulfillment` from ERP-Platform
+for real Auth issuance/login, TLS/Kong/Catalog and outage acceptance. Only generated
+owned fixtures are changed/removed. Simulated commit faults are separate from real
+network outages. Real Sales acceptance/integration, normal acceptance, returns,
+partials, courier integration and expiry remain pending/deferred. Kafka remains
+Milestone10; full Postman collection is a final release deliverable.

@@ -221,3 +221,42 @@ delivery, Kafka, Outbox, Inbox and Saga are outside this milestone. The next tas
 is a separately approved production stock workflow/actor-producer authorization
 specification, not an arbitrary mutation endpoint. Normal rollout and gateway runtime
 verification are separate from completing the direct authenticated read paths.
+
+
+## Adjustment/correction audit extension
+
+After Inventory migration 000005, movement items may additionally include
+`reason_code`, `explanation`, and `reverses_operation_id`. These are immutable
+operation metadata, available under the existing exact GLOBAL
+`inventory.stock-movements:read` permission; legacy movement items omit them.
+The reversal's pack conversion/labels come from the original posted facts, while
+its reference revision and validation time describe a fresh current direct-piece
+eligibility check. See [Stock Adjustments and Corrections](stock-adjustments-spec.md).
+No Catalog lookup is performed by stock reads. BIGINT response fields remain strings.
+
+
+## Reservation availability extension (Milestone 8)
+
+Inventory 000006 adds decimal-string `reserved_pieces`, `available_pieces` and
+`reservation_version` to balance items. available_pieces is on_hand_pieces minus
+reserved_pieces, with 0 <= reserved <= on_hand. Existing `version` still counts
+physical movements; availability changes on physical movements or hold transitions,
+so compare `(version,reservation_version)`. Reserve/release create no movement rows.
+`nonzero_only` continues to mean nonzero **on-hand**, including fully held stock.
+Human balance/movement authority is unchanged; Sales machines use separate owner-only
+reservation status routes, never these human routes. No actor secrets are exposed.
+See [reservation contracts, rollout and sequencing](stock-reservations-spec.md).
+
+Current binary prerequisite: Inventory schema through 000006 even when reservation
+posting is off, because shared generated/read queries reference the new columns.
+Earlier migration numbers above describe the original Stock Read milestone.
+
+
+## Milestone 9 compatibility checkpoint
+
+Current binary prerequisites advance to Inventory schema7 for the shared reservation/
+fulfillment guards and query bindings. Balance/movement read permissions and payload
+meanings remain unchanged. Drafts/delivery metadata create no movement; confirming
+full dispatch consumes its hold once and records a HUMAN actor separately from the
+Sales machine owner. Dispatch operations are not eligible for the existing Opening/
+Adjustment-only correction endpoint. See [fulfillment](fulfillment-spec.md).

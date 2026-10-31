@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	f "github.com/Group-project-bridgeon/Inventory-Service/internal/fulfillment"
 	"io"
 	"net/http"
 	"strconv"
@@ -121,45 +122,53 @@ func openingInput(c *gin.Context, prepare bool) (uuid.UUID, uuid.UUID, uuid.UUID
 			return fail(400)
 		}
 	}
-	lines := make([]stock.CommandLine, 0, len(in.Lines))
-	selections := make([]stock.Selection, 0, len(in.Lines))
-	for _, l := range in.Lines {
+	lines, valid := parseStockLines(in.Lines, prepare)
+	if !valid {
+		return fail(400)
+	}
+	return wh, op, key, lines, true
+}
+
+func parseStockLines(input []openingLine, prepare bool) ([]stock.CommandLine, bool) {
+	lines := make([]stock.CommandLine, 0, len(input))
+	selections := make([]stock.Selection, 0, len(input))
+	for _, l := range input {
 		variant, valid := openingID(l.Variant)
 		if !valid {
-			return fail(400)
+			return nil, false
 		}
 		count, e := stock.ParsePositiveQuantity(l.Count)
 		if e != nil {
-			return fail(400)
+			return nil, false
 		}
 		var pack uuid.UUID
 		revision := ""
 		if (l.Pack == nil) != (l.PackRevision == nil) {
-			return fail(400)
+			return nil, false
 		}
 		if l.Pack != nil {
 			pack, valid = openingID(*l.Pack)
 			if !valid {
-				return fail(400)
+				return nil, false
 			}
 			revision = *l.PackRevision
 			if _, e := stock.ParsePositiveQuantity(revision); e != nil {
-				return fail(400)
+				return nil, false
 			}
 		}
 		expected := ""
 		if prepare {
 			if l.Expected != nil {
-				return fail(400)
+				return nil, false
 			}
 		} else {
 			if l.Expected == nil || len(*l.Expected) != 77 || !strings.HasPrefix(*l.Expected, "cat-stock-v1:") {
-				return fail(400)
+				return nil, false
 			}
 			expected = *l.Expected
 			for _, r := range expected[13:] {
 				if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
-					return fail(400)
+					return nil, false
 				}
 			}
 		}
@@ -167,9 +176,9 @@ func openingInput(c *gin.Context, prepare bool) (uuid.UUID, uuid.UUID, uuid.UUID
 		lines = append(lines, stock.CommandLine{LineNumber: l.Number, VariantID: variant, InputCount: count, PackID: pack, PackRevision: revision, ExpectedStockReferenceRevision: expected})
 	}
 	if stock.ValidateSelections(selections) != nil {
-		return fail(400)
+		return nil, false
 	}
-	return wh, op, key, lines, true
+	return lines, true
 }
 
 type openingPostedLine struct {
@@ -277,6 +286,36 @@ func openingError(c *gin.Context, err error) {
 		status, code = 404, "warehouse_not_found"
 	case errors.Is(err, stock.ErrReferenceNotFound):
 		status, code = 404, "reference_not_found"
+	case errors.Is(err, f.ErrNotFound):
+		status, code = 404, "dispatch_not_found"
+	case errors.Is(err, f.ErrState):
+		status, code = 409, "dispatch_state_conflict"
+	case errors.Is(err, f.ErrStale):
+		status, code = 409, "stale_dispatch"
+	case errors.Is(err, f.ErrClaimed):
+		status, code = 409, "reservation_has_dispatch"
+	case errors.Is(err, stock.ErrReservationNotFound):
+		status, code = 404, "reservation_not_found"
+	case errors.Is(err, stock.ErrReservationExists):
+		status, code = 409, "reservation_exists"
+	case errors.Is(err, stock.ErrReservationTerminal):
+		status, code = 409, "reservation_terminal"
+	case errors.Is(err, stock.ErrReservationOrder):
+		status, code = 409, "reservation_out_of_order"
+	case errors.Is(err, stock.ErrReservationStale):
+		status, code = 409, "stale_reservation"
+	case errors.Is(err, stock.ErrOrderConsumed):
+		status, code = 409, "order_consumed"
+	case errors.Is(err, stock.ErrInsufficientAvailable):
+		status, code = 409, "insufficient_available_stock"
+	case errors.Is(err, stock.ErrOriginalNotFound):
+		status, code = 404, "original_operation_not_found"
+	case errors.Is(err, stock.ErrNotReversible):
+		status, code = 409, "operation_not_reversible"
+	case errors.Is(err, stock.ErrAlreadyReversed):
+		status, code = 409, "already_reversed"
+	case errors.Is(err, stock.ErrInsufficientStock):
+		status, code = 409, "insufficient_stock"
 	case errors.Is(err, stock.ErrOpeningNotEligible):
 		status, code = 409, "opening_not_eligible"
 	case errors.Is(err, stock.ErrWarehouseInactive):
@@ -305,9 +344,19 @@ func openingError(c *gin.Context, err error) {
 		status, code = 503, "reference_unavailable"
 	}
 	if status >= 500 {
-		logger.DiagnoseHTTP(c, "opening_stock", err)
+		op := "opening_stock"
+		if strings.Contains(c.FullPath(), "/stock-adjustments") || strings.Contains(c.FullPath(), "/stock-corrections") {
+			op = "stock_adjustment"
+		}
+		if strings.Contains(c.FullPath(), "/reservations") {
+			op = "reservation"
+		}
+		if strings.Contains(c.FullPath(), "/dispatches") {
+			op = "fulfillment"
+		}
+		logger.DiagnoseHTTP(c, op, err)
 	}
-	message := "opening stock request failed"
+	message := "stock request failed"
 	if code == "outcome_unknown" {
 		message = "posting outcome unknown; reconcile using the same operation, key and request"
 	}

@@ -23,10 +23,21 @@ func (c Command) Fingerprint(principal Principal) (RequestFingerprint, error) {
 	if err := c.Validate(); err != nil {
 		return RequestFingerprint{}, err
 	}
-	if principal.UserID == uuid.Nil {
+	if c.CommandVersion >= 3 {
+		data, err := c.canonicalConsume(principal)
+		if err != nil {
+			return RequestFingerprint{}, err
+		}
+		return RequestFingerprint{Version: uint16(c.CommandVersion), Hash: sha256.Sum256(data)}, nil
+	}
+	if principal.UserID == uuid.Nil || principal.MachineID != uuid.Nil {
 		return RequestFingerprint{}, fmt.Errorf("actor identity: %w", ErrInvalidArgument)
 	}
-	return RequestFingerprint{Version: FingerprintVersion, Hash: sha256.Sum256(c.canonicalIntent(principal))}, nil
+	version := FingerprintVersion
+	if c.CommandVersion == 2 {
+		version = 2
+	}
+	return RequestFingerprint{Version: version, Hash: sha256.Sum256(c.canonicalIntent(principal))}, nil
 }
 
 // canonicalIntent v1 is frozen: domain tag; big-endian uint16 fingerprint and
@@ -37,7 +48,11 @@ func (c Command) Fingerprint(principal Principal) (RequestFingerprint, error) {
 // optional pack UUID + revision text, then expected reference revision text.
 func (c Command) canonicalIntent(principal Principal) []byte {
 	data := []byte("inventory.stock.request\x00")
-	data = binary.BigEndian.AppendUint16(data, FingerprintVersion)
+	version := FingerprintVersion
+	if c.CommandVersion == 2 {
+		version = 2
+	}
+	data = binary.BigEndian.AppendUint16(data, version)
 	data = binary.BigEndian.AppendUint16(data, uint16(c.CommandVersion))
 	data = append(data, c.OperationID[:]...)
 	data = appendText(data, c.Producer)
@@ -60,6 +75,11 @@ func (c Command) canonicalIntent(principal Principal) []byte {
 			data = appendText(data, line.PackRevision)
 		}
 		data = appendText(data, line.ExpectedStockReferenceRevision)
+	}
+	if c.CommandVersion == 2 {
+		data = appendText(data, c.Audit.ReasonCode)
+		data = appendText(data, c.Audit.Explanation)
+		data = append(data, c.Audit.OriginalOperationID[:]...)
 	}
 	return data
 }

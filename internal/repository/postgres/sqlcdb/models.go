@@ -8,14 +8,127 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Dispatch struct {
+	ID                pgtype.UUID
+	OwnerMachineID    pgtype.UUID
+	ReservationID     pgtype.UUID
+	OrderID           pgtype.UUID
+	WarehouseID       pgtype.UUID
+	Generation        int64
+	State             string
+	Version           int64
+	OperationID       pgtype.UUID
+	ExternalReference string
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+}
+
+type FulfillmentCommand struct {
+	ActorKind          string
+	ActorID            pgtype.UUID
+	Key                pgtype.UUID
+	CommandID          pgtype.UUID
+	DispatchID         pgtype.UUID
+	OwnerMachineID     pgtype.UUID
+	Action             string
+	FingerprintVersion int16
+	RequestHash        []byte
+	State              string
+	ResultVersion      pgtype.Int2
+	Result             []byte
+	CreatedAt          pgtype.Timestamptz
+	CompletedAt        pgtype.Timestamptz
+}
+
+type FulfillmentTransition struct {
+	ID                pgtype.UUID
+	DispatchID        pgtype.UUID
+	CommandID         pgtype.UUID
+	ActorKind         string
+	ActorID           pgtype.UUID
+	Action            string
+	State             string
+	Version           int64
+	OperationID       pgtype.UUID
+	Outcome           pgtype.Text
+	ExternalReference string
+	Note              string
+	FirstRequestID    pgtype.Text
+	ChangedAt         pgtype.Timestamptz
+}
+
+type ReservationCommand struct {
+	OwnerMachineID     pgtype.UUID
+	Key                pgtype.UUID
+	CommandID          pgtype.UUID
+	ReservationID      pgtype.UUID
+	OrderID            pgtype.UUID
+	WarehouseID        pgtype.UUID
+	Generation         int64
+	Action             string
+	FingerprintVersion int16
+	RequestHash        []byte
+	State              string
+	ResultVersion      pgtype.Int2
+	Result             []byte
+	CreatedAt          pgtype.Timestamptz
+	CompletedAt        pgtype.Timestamptz
+	ActorUserID        pgtype.UUID
+	DispatchID         pgtype.UUID
+}
+
+type ReservationLine struct {
+	ReservationID          pgtype.UUID
+	LineNumber             int16
+	OrderLineID            pgtype.UUID
+	VariantID              pgtype.UUID
+	Pieces                 int64
+	ProductID              pgtype.UUID
+	BaseUnitID             pgtype.UUID
+	ProductCode            string
+	ProductName            string
+	Sku                    string
+	BaseUnitCode           string
+	StockReferenceRevision string
+	ReferenceCheckedAt     pgtype.Timestamptz
+}
+
+type ReservationOrder struct {
+	OwnerMachineID       pgtype.UUID
+	OrderID              pgtype.UUID
+	Generation           int64
+	Version              int64
+	CurrentReservationID pgtype.UUID
+	CreatedAt            pgtype.Timestamptz
+}
+
+type ReservationTransition struct {
+	ID                 pgtype.UUID
+	ReservationID      pgtype.UUID
+	OwnerMachineID     pgtype.UUID
+	OrderID            pgtype.UUID
+	CommandID          pgtype.UUID
+	Action             string
+	State              string
+	ReservationVersion int64
+	OrderVersion       int64
+	OperationID        pgtype.UUID
+	FirstRequestID     pgtype.Text
+	ChangedAt          pgtype.Timestamptz
+	ActorUserID        pgtype.UUID
+	DispatchID         pgtype.UUID
+}
+
 type StockBalance struct {
-	WarehouseID  pgtype.UUID
-	VariantID    pgtype.UUID
-	BaseUnitID   pgtype.UUID
-	OnHandPieces int64
-	Version      int64
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	WarehouseID        pgtype.UUID
+	VariantID          pgtype.UUID
+	BaseUnitID         pgtype.UUID
+	OnHandPieces       int64
+	Version            int64
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	ReservedPieces     int64
+	ReservationVersion int64
 }
 
 type StockIdempotency struct {
@@ -30,6 +143,8 @@ type StockIdempotency struct {
 	Result             []byte
 	CreatedAt          pgtype.Timestamptz
 	CompletedAt        pgtype.Timestamptz
+	ActorKind          string
+	ActorMachineID     pgtype.UUID
 }
 
 type StockMovement struct {
@@ -70,6 +185,30 @@ type StockOperation struct {
 	IdempotencyKey pgtype.UUID
 	PostedAt       pgtype.Timestamptz
 	FirstRequestID pgtype.Text
+	ActorKind      string
+	ActorMachineID pgtype.UUID
+}
+
+type StockOperationAudit struct {
+	OperationID         pgtype.UUID
+	ReasonCode          string
+	Explanation         string
+	OriginalOperationID pgtype.UUID
+}
+
+type StockReservation struct {
+	ID             pgtype.UUID
+	OwnerMachineID pgtype.UUID
+	OrderID        pgtype.UUID
+	WarehouseID    pgtype.UUID
+	Generation     int64
+	State          string
+	Version        int64
+	OrderVersion   int64
+	LineCount      int16
+	OperationID    pgtype.UUID
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
 }
 
 type Warehouse struct {

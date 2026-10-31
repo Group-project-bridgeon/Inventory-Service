@@ -213,6 +213,7 @@ func (g *stockGateway) snapshot() [32]byte {
  (SELECT jsonb_agg(to_jsonb(x) ORDER BY warehouse_id,variant_id) FROM stock_balances x),
  (SELECT jsonb_agg(to_jsonb(x) ORDER BY id) FROM stock_operations x),
  (SELECT jsonb_agg(to_jsonb(x) ORDER BY id) FROM stock_movements x),
+ (SELECT jsonb_agg(to_jsonb(x) ORDER BY operation_id) FROM stock_operation_audit x),
  (SELECT jsonb_agg(to_jsonb(x) ORDER BY producer,key) FROM stock_idempotency x))::text`).Scan(&value))
 	return sha256.Sum256([]byte(value))
 }

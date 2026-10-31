@@ -18,7 +18,10 @@ type HTTPConfig struct {
 	SlowRequestThreshold, ReadinessTimeout, ReadHeaderTimeout, ReadTimeout, WriteTimeout, IdleTimeout, ShutdownTimeout time.Duration
 }
 type Config struct {
+	StockFulfillmentEnabled                  bool
 	OpeningStockEnabled                      bool
+	StockAdjustmentsEnabled                  bool
+	StockReservationsEnabled                 bool
 	StockReference                           catalogclient.Config
 	Port                                     string
 	DatabaseURL                              string
@@ -104,6 +107,36 @@ func Load() (*Config, error) {
 	c.StockReference, err = catalogclient.LoadConfig()
 	if err != nil {
 		return nil, err
+	}
+	switch os.Getenv("STOCK_RESERVATIONS_ENABLED") {
+	case "", "false":
+	case "true":
+		c.StockReservationsEnabled = true
+	default:
+		return nil, fmt.Errorf("invalid STOCK_RESERVATIONS_ENABLED")
+	}
+	if c.StockReservationsEnabled && !c.StockReference.Enabled {
+		return nil, fmt.Errorf("stock reservations require STOCK_REFERENCE_ENABLED")
+	}
+	switch os.Getenv("STOCK_FULFILLMENT_ENABLED") {
+	case "", "false":
+	case "true":
+		c.StockFulfillmentEnabled = true
+	default:
+		return nil, fmt.Errorf("invalid STOCK_FULFILLMENT_ENABLED")
+	}
+	if c.StockFulfillmentEnabled && !c.StockReservationsEnabled {
+		return nil, fmt.Errorf("fulfillment requires STOCK_RESERVATIONS_ENABLED")
+	}
+	switch os.Getenv("STOCK_ADJUSTMENTS_ENABLED") {
+	case "", "false":
+	case "true":
+		c.StockAdjustmentsEnabled = true
+	default:
+		return nil, fmt.Errorf("invalid STOCK_ADJUSTMENTS_ENABLED")
+	}
+	if c.StockAdjustmentsEnabled && !c.StockReference.Enabled {
+		return nil, fmt.Errorf("stock adjustments require STOCK_REFERENCE_ENABLED")
 	}
 	switch os.Getenv("OPENING_STOCK_ENABLED") {
 	case "", "false":

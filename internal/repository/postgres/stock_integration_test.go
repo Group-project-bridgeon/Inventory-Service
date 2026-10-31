@@ -258,8 +258,10 @@ func TestStockSQLCompleteBoundariesAndReplay(t *testing.T) {
 func TestStockSQLInvalidConstraints(t *testing.T) {
 	f := stockDB(t)
 	for _, tc := range []struct{ name, sql, code, constraint string }{
-		{"negative balance", `INSERT INTO stock_balances(warehouse_id,variant_id,base_unit_id,on_hand_pieces) VALUES($1,$2,$3,-1)`, "23514", "stock_balances_nonnegative"},
-		{"int64 minimum", `INSERT INTO stock_balances(warehouse_id,variant_id,base_unit_id,on_hand_pieces) VALUES($1,$2,$3,-9223372036854775808)`, "23514", "stock_balances_nonnegative"},
+		// Schema 6 also rejects negative on-hand through reserved <= on-hand;
+		// PostgreSQL checks stock_available_valid before stock_balances_nonnegative.
+		{"negative balance", `INSERT INTO stock_balances(warehouse_id,variant_id,base_unit_id,on_hand_pieces) VALUES($1,$2,$3,-1)`, "23514", "stock_available_valid"},
+		{"int64 minimum", `INSERT INTO stock_balances(warehouse_id,variant_id,base_unit_id,on_hand_pieces) VALUES($1,$2,$3,-9223372036854775808)`, "23514", "stock_available_valid"},
 		{"above int64 maximum", `INSERT INTO stock_balances(warehouse_id,variant_id,base_unit_id,on_hand_pieces) VALUES($1,$2,$3,9223372036854775808)`, "22003", ""},
 		{"negative version", `INSERT INTO stock_balances(warehouse_id,variant_id,base_unit_id,version) VALUES($1,$2,$3,-1)`, "23514", "stock_balances_version_valid"},
 		{"missing warehouse", `INSERT INTO stock_balances(warehouse_id,variant_id,base_unit_id) VALUES($2,$2,$3)`, "23503", ""},

@@ -18,7 +18,9 @@ func Identity(c *gin.Context) (*Claims, bool) {
 
 // Protect denies unlisted routes. Only the two exact GET probe routes are public.
 // Policy keys use Gin route templates, not untrusted URL or proxy headers.
-func Protect(verifier *Verifier, policy map[string][]string) gin.HandlerFunc {
+// Explicit alternatives apply only at the route boundary; the workflow then
+// enforces its exact direction permission. Other routes keep all-of semantics.
+func Protect(verifier *Verifier, policy map[string][]string, alternatives ...map[string]bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.Method == http.MethodGet && (c.FullPath() == "/health" || c.FullPath() == "/ready") {
 			c.Next()
@@ -44,6 +46,8 @@ func Protect(verifier *Verifier, policy map[string][]string) gin.HandlerFunc {
 			logger.Respond(c, http.StatusForbidden, "forbidden", "permission denied")
 			return
 		}
+		anyOf := len(alternatives) == 1 && alternatives[0][c.Request.Method+" "+c.FullPath()]
+		matched := false
 		for _, permission := range required {
 			found := false
 			for _, grant := range claims.Permissions {
@@ -52,10 +56,15 @@ func Protect(verifier *Verifier, policy map[string][]string) gin.HandlerFunc {
 					break
 				}
 			}
-			if !found {
+			matched = matched || found
+			if !found && !anyOf {
 				logger.Respond(c, http.StatusForbidden, "forbidden", "permission denied")
 				return
 			}
+		}
+		if !matched {
+			logger.Respond(c, http.StatusForbidden, "forbidden", "permission denied")
+			return
 		}
 		c.Next()
 	}

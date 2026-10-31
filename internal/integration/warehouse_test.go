@@ -282,7 +282,8 @@ func runWarehouseHTTP(t *testing.T, gateway bool) {
 		if err != nil {
 			t.Fatal("real login token invalid")
 		}
-		claims.IssuedAt = jwt.NewNumericDate(time.Now().Add(-901 * time.Second))
+		// Keep expiry well in the past across Windows/WSL clocks and loaded hosts.
+		claims.IssuedAt = jwt.NewNumericDate(time.Now().Add(-1800 * time.Second))
 		claims.NotBefore = claims.IssuedAt
 		claims.ExpiresAt = jwt.NewNumericDate(claims.IssuedAt.Add(900 * time.Second))
 		expired, err := jwt.NewWithClaims(jwt.SigningMethodRS256, claims).SignedString(key)

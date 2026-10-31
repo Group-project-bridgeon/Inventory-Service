@@ -24,7 +24,7 @@ const (
 
 // Principal must originate from a future verified workflow boundary. A nonzero
 // UUID is structural validation, not authentication or permission enforcement.
-type Principal struct{ UserID uuid.UUID }
+type Principal struct{ UserID, MachineID uuid.UUID }
 
 type Command struct {
 	// Execution metadata excluded from canonical intent.
@@ -37,6 +37,9 @@ type Command struct {
 	CommandVersion int16
 	IdempotencyKey uuid.UUID
 	Lines          []CommandLine
+	Audit          *AdjustmentAudit
+	Original       *OriginalOperation // Immutable facts loaded by the trusted workflow, never HTTP input.
+	Consume        *ConsumePlan
 }
 
 type CommandLine struct {
@@ -53,10 +56,13 @@ func boundedText(text string, max int) bool {
 }
 
 func (line CommandLine) validate() error {
+	return line.validateFields(true)
+}
+func (line CommandLine) validateFields(requireRevision bool) error {
 	if line.LineNumber < 1 || line.LineNumber > MaxLines || line.VariantID == uuid.Nil || line.InputCount <= 0 {
 		return fmt.Errorf("line identity or quantity: %w", ErrInvalidArgument)
 	}
-	if !boundedText(line.ExpectedStockReferenceRevision, maxRevisionLength) {
+	if requireRevision && !boundedText(line.ExpectedStockReferenceRevision, maxRevisionLength) {
 		return fmt.Errorf("stock reference revision: %w", ErrInvalidArgument)
 	}
 	if line.PackID == uuid.Nil {
@@ -82,7 +88,7 @@ func (c Command) Validate() error {
 	if c.IdempotencyKey == uuid.Nil || (c.IdempotencyKey.Version() != 4 && c.IdempotencyKey.Version() != 7) || c.IdempotencyKey.Variant() != uuid.RFC4122 {
 		return fmt.Errorf("idempotency key: %w", ErrInvalidArgument)
 	}
-	if !boundedText(c.Producer, maxProducerLength) || c.CommandVersion != CommandVersion || (c.Direction != In && c.Direction != Out) {
+	if !boundedText(c.Producer, maxProducerLength) || (c.CommandVersion != CommandVersion && c.CommandVersion != 2 && c.CommandVersion != 3 && c.CommandVersion != 4) || (c.Direction != In && c.Direction != Out) {
 		return fmt.Errorf("command contract: %w", ErrInvalidArgument)
 	}
 	if len(c.Lines) < 1 || len(c.Lines) > MaxLines {
@@ -91,7 +97,7 @@ func (c Command) Validate() error {
 	variants := make(map[uuid.UUID]bool, len(c.Lines))
 	lineNumbers := make(map[int16]bool, len(c.Lines))
 	for _, line := range c.Lines {
-		if err := line.validate(); err != nil {
+		if err := line.validateFields(c.CommandVersion != 3 && c.CommandVersion != 4); err != nil {
 			return err
 		}
 		if int(line.LineNumber) > len(c.Lines) || variants[line.VariantID] || lineNumbers[line.LineNumber] {
@@ -99,5 +105,11 @@ func (c Command) Validate() error {
 		}
 		variants[line.VariantID], lineNumbers[line.LineNumber] = true, true
 	}
-	return nil
+	if c.CommandVersion >= 3 {
+		return c.validateConsume()
+	}
+	if c.Consume != nil {
+		return ErrInvalidArgument
+	}
+	return c.validateAdjustment()
 }

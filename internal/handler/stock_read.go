@@ -19,14 +19,20 @@ type StockReadHandler struct{ service *service.StockReadService }
 func NewStockReadHandler(s *service.StockReadService) *StockReadHandler { return &StockReadHandler{s} }
 
 type stockBalanceResponse struct {
-	WarehouseID  uuid.UUID `json:"warehouse_id"`
-	VariantID    uuid.UUID `json:"variant_id"`
-	BaseUnitID   uuid.UUID `json:"base_unit_id"`
-	OnHandPieces string    `json:"on_hand_pieces"`
-	Version      string    `json:"version"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ReservedPieces     string    `json:"reserved_pieces"`
+	AvailablePieces    string    `json:"available_pieces"`
+	ReservationVersion string    `json:"reservation_version"`
+	WarehouseID        uuid.UUID `json:"warehouse_id"`
+	VariantID          uuid.UUID `json:"variant_id"`
+	BaseUnitID         uuid.UUID `json:"base_unit_id"`
+	OnHandPieces       string    `json:"on_hand_pieces"`
+	Version            string    `json:"version"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 type stockMovementResponse struct {
+	ReasonCode             *string    `json:"reason_code,omitempty"`
+	Explanation            *string    `json:"explanation,omitempty"`
+	OriginalOperationID    *uuid.UUID `json:"reverses_operation_id,omitempty"`
 	ID                     uuid.UUID  `json:"id"`
 	OperationID            uuid.UUID  `json:"operation_id"`
 	WarehouseID            uuid.UUID  `json:"warehouse_id"`
@@ -128,7 +134,7 @@ func (h *StockReadHandler) ListBalances(c *gin.Context) {
 	}
 	items := make([]stockBalanceResponse, 0, len(page.Items))
 	for _, b := range page.Items {
-		items = append(items, stockBalanceResponse{b.WarehouseID, b.VariantID, b.BaseUnitID, strconv.FormatInt(b.OnHandPieces, 10), strconv.FormatInt(b.Version, 10), b.UpdatedAt})
+		items = append(items, stockBalanceResponse{strconv.FormatInt(b.ReservedPieces, 10), strconv.FormatInt(b.AvailablePieces, 10), strconv.FormatInt(b.ReservationVersion, 10), b.WarehouseID, b.VariantID, b.BaseUnitID, strconv.FormatInt(b.OnHandPieces, 10), strconv.FormatInt(b.Version, 10), b.UpdatedAt})
 	}
 	c.JSON(http.StatusOK, struct {
 		Items      []stockBalanceResponse `json:"items"`
@@ -148,7 +154,7 @@ func (h *StockReadHandler) ListMovements(c *gin.Context) {
 	}
 	items := make([]stockMovementResponse, 0, len(page.Items))
 	for _, m := range page.Items {
-		items = append(items, stockMovementResponse{m.ID, m.OperationID, m.WarehouseID, m.VariantID, m.Direction, strconv.FormatInt(m.InputCount, 10), strconv.FormatInt(m.PiecesPerInput, 10), strconv.FormatInt(m.Pieces, 10), strconv.FormatInt(m.BeforePieces, 10), strconv.FormatInt(m.AfterPieces, 10), strconv.FormatInt(m.BalanceVersion, 10), m.PostedAt, m.ProductID, m.BaseUnitID, m.PackID, m.PackRevision, m.PackLabel, m.ProductCode, m.ProductName, m.SKU, m.BaseUnitCode, m.StockReferenceRevision, m.ReferenceCheckedAt})
+		items = append(items, stockMovementResponse{m.ReasonCode, m.Explanation, m.OriginalOperationID, m.ID, m.OperationID, m.WarehouseID, m.VariantID, m.Direction, strconv.FormatInt(m.InputCount, 10), strconv.FormatInt(m.PiecesPerInput, 10), strconv.FormatInt(m.Pieces, 10), strconv.FormatInt(m.BeforePieces, 10), strconv.FormatInt(m.AfterPieces, 10), strconv.FormatInt(m.BalanceVersion, 10), m.PostedAt, m.ProductID, m.BaseUnitID, m.PackID, m.PackRevision, m.PackLabel, m.ProductCode, m.ProductName, m.SKU, m.BaseUnitCode, m.StockReferenceRevision, m.ReferenceCheckedAt})
 	}
 	c.JSON(http.StatusOK, struct {
 		Items      []stockMovementResponse `json:"items"`
